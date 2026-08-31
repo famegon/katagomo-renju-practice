@@ -212,7 +212,8 @@ def evaluate_training_move(
     user_move: str,
     user_color: str,
     pre_analysis: Mapping[str, Any],
-    post_root_info: Mapping[str, Any],
+    post_root_info: Mapping[str, Any] | None = None,
+    terminal_state: Mapping[str, Any] | None = None,
     minimum_candidate_visits: int = 1,
     legal_moves: Sequence[str] | None = None,
 ) -> dict[str, Any]:
@@ -220,8 +221,10 @@ def evaluate_training_move(
 
     ``pre_analysis`` must contain the transformed ``policy`` (226 values),
     ``candidates``, and ``rootInfo`` objects.  Candidate and root winrates use
-    the explicit ``blackWinrate`` field.  ``post_root_info`` is the rootInfo
-    object obtained after playing ``user_move`` and analyzing the new root.
+    the explicit ``blackWinrate`` field. Exactly one post-move source is
+    required: ``post_root_info`` is the analyzed non-terminal child, while
+    ``terminal_state`` is the official BoardHistory result. A terminal result
+    is never presented as an engine search estimate.
 
     Recommendation loss uses same-search candidate winrates when the user's
     move is present in ``candidates``.  If MCTS omitted the move, the post-move
@@ -230,6 +233,10 @@ def evaluate_training_move(
     the user's perspective.
     """
 
+    if (post_root_info is None) == (terminal_state is None):
+        raise ValueError(
+            "exactly one of post_root_info or terminal_state must be provided"
+        )
     if isinstance(ply, bool) or not isinstance(ply, int) or ply <= 0:
         raise ValueError(f"ply must be a positive integer, got {ply!r}")
     color = _player(user_color)
@@ -295,28 +302,60 @@ def evaluate_training_move(
         turn_number, field="pre_analysis.turnNumber"
     ) != ply - 1:
         raise ValueError(f"pre_analysis.turnNumber must be {ply - 1} for ply {ply}")
-    post_current_player = post_root_info.get("currentPlayer")
-    expected_post_player = "W" if color == "B" else "B"
-    if post_current_player is not None and str(post_current_player).upper() != expected_post_player:
-        raise ValueError(
-            f"post_root_info.currentPlayer must be {expected_post_player} after {color}"
-        )
     before_user_winrate = _user_winrate(
         pre_root.get("blackWinrate"), color, field="pre root blackWinrate"
     )
-    after_user_winrate = _user_winrate(
-        post_root_info.get("blackWinrate"), color, field="post root blackWinrate"
-    )
+    terminal_outcome: str | None = None
+    terminal_reason: str | None = None
+    if terminal_state is not None:
+        if terminal_state.get("isTerminal") is not True:
+            raise ValueError("terminal_state must describe a terminal position")
+        winner = terminal_state.get("winner")
+        terminal_outcome = str(terminal_state.get("outcome", ""))
+        terminal_reason = str(terminal_state.get("terminalReason", "")) or None
+        if winner == "B":
+            terminal_black_winrate = 1.0
+        elif winner == "W":
+            terminal_black_winrate = 0.0
+        elif winner is None and terminal_outcome == "draw":
+            terminal_black_winrate = 0.5
+        else:
+            raise ValueError("terminal_state has an inconsistent winner/outcome")
+        after_user_winrate = _user_winrate(
+            terminal_black_winrate,
+            color,
+            field="official terminal black result",
+        )
+        post_root_visits: int | None = None
+        after_user_winrate_source = "official-terminal-result"
+    else:
+        assert post_root_info is not None
+        post_current_player = post_root_info.get("currentPlayer")
+        expected_post_player = "W" if color == "B" else "B"
+        if (
+            post_current_player is not None
+            and str(post_current_player).upper() != expected_post_player
+        ):
+            raise ValueError(
+                f"post_root_info.currentPlayer must be {expected_post_player} after {color}"
+            )
+        after_user_winrate = _user_winrate(
+            post_root_info.get("blackWinrate"),
+            color,
+            field="post root blackWinrate",
+        )
+        post_root_visits = _non_negative_int(
+            post_root_info.get("visits", 0), field="post root visits"
+        )
+        after_user_winrate_source = "engine-post-root"
     winrate_delta = after_user_winrate - before_user_winrate
 
     pre_root_visits = _non_negative_int(pre_root.get("visits", 0), field="pre root visits")
-    post_root_visits = _non_negative_int(
-        post_root_info.get("visits", 0), field="post root visits"
-    )
-    if post_root_visits == 0:
-        insufficient_reasons.append("zero-post-root-visits")
-    elif post_root_visits < configured_minimum:
-        insufficient_reasons.append("below-minimum-post-root-visits")
+    if post_root_visits is not None:
+        if post_root_visits == 0:
+            insufficient_reasons.append("zero-post-root-visits")
+        elif post_root_visits < configured_minimum:
+            insufficient_reasons.append("below-minimum-post-root-visits")
     if pre_root_visits == 0:
         insufficient_reasons.append("zero-pre-root-visits")
     elif pre_root_visits < configured_minimum:
@@ -376,7 +415,11 @@ def evaluate_training_move(
     winrate_loss_source = (
         "pre-move-candidates"
         if chosen_expected_user_winrate is not None
-        else "post-move-root"
+        else (
+            "official-terminal-result"
+            if terminal_state is not None
+            else "post-move-root"
+        )
     )
     recommended_winrate_gap = (
         recommended_user_winrate - comparison_user_winrate
@@ -413,12 +456,15 @@ def evaluate_training_move(
         "postRootVisits": post_root_visits,
         "beforeUserWinrate": before_user_winrate,
         "afterUserWinrate": after_user_winrate,
+        "afterUserWinrateSource": after_user_winrate_source,
         "winrateDelta": winrate_delta,
         "recommendedUserWinrate": recommended_user_winrate,
         "chosenExpectedUserWinrate": chosen_expected_user_winrate,
         "recommendedWinrateGap": recommended_winrate_gap,
         "winrateLoss": winrate_loss,
         "winrateLossSource": winrate_loss_source,
+        "terminalOutcome": terminal_outcome,
+        "terminalReason": terminal_reason,
         "analysisInsufficient": analysis_insufficient,
         "analysisInsufficientReasons": insufficient_reasons,
         "minimumCandidateVisits": configured_minimum,

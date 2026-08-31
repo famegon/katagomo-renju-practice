@@ -54,6 +54,7 @@ def transform_analysis_response(
         return {
             "type": "analysis",
             "requestId": request_id,
+            "turnNumber": raw.get("turnNumber"),
             "isDuringSearch": False,
             "isFinal": True,
             "analysisState": "canceled",

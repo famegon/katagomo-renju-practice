@@ -34,6 +34,27 @@ def analysis_payload() -> dict:
     }
 
 
+def terminal_state(*, winner: str | None = "B", move_count: int = 5) -> dict:
+    outcome = "draw" if winner is None else ("black_win" if winner == "B" else "white_win")
+    return {
+        "boardXSize": 15,
+        "boardYSize": 15,
+        "rules": "renju",
+        "isValid": True,
+        "moveCount": move_count,
+        "nextPlayer": "W" if move_count % 2 else "B",
+        "isTerminal": True,
+        "winner": winner,
+        "outcome": outcome,
+        "terminalReason": "board_full" if winner is None else "line_win",
+        "terminalMove": "J8",
+        "forbiddenMoves": [],
+        "legalMoves": [],
+        "source": "KataGomo Board::isForbidden()",
+        "historySource": "KataGomo BoardHistory::makeBoardMoveAssumeLegal()",
+    }
+
+
 def test_training_options_contract(fake_settings):
     with TestClient(create_app(fake_settings)) as client:
         response = client.get("/api/training/options")
@@ -41,6 +62,8 @@ def test_training_options_contract(fake_settings):
         assert response.json() == {
             "endPlyOptions": [6, 8, 10, 12, 14, 16],
             "defaultEndPly": 14,
+            "manualFinishSupported": True,
+            "manualEndValue": "manual",
             "minimumCandidateVisits": 50,
             "winratePerspective": "BLACK",
             "scoreContract": "metrics-only-no-opaque-score",
@@ -77,6 +100,60 @@ def test_training_evaluate_uses_official_legal_moves_for_policy_rank(fake_settin
         assert body["sessionEpoch"] == "epoch-1"
         assert body["prePositionRevision"] == 4
         assert body["postPositionRevision"] == 5
+
+
+def test_training_evaluate_uses_official_terminal_result_without_fake_search(
+    fake_settings,
+):
+    with TestClient(create_app(fake_settings)) as client:
+        response = client.post(
+            "/api/training/evaluate",
+            json={
+                "ply": 5,
+                "userMove": "J8",
+                "userColor": "B",
+                "preAnalysis": analysis_payload(),
+                "terminalState": terminal_state(),
+                "legalMoves": ["H8", "J8"],
+                "minimumCandidateVisits": 50,
+            },
+        )
+        assert response.status_code == 200
+        body = response.json()
+        assert body["afterUserWinrate"] == 1.0
+        assert body["afterUserWinrateSource"] == "official-terminal-result"
+        assert body["postRootVisits"] is None
+        assert body["terminalOutcome"] == "black_win"
+        assert body["terminalReason"] == "line_win"
+        assert "zero-post-root-visits" not in body["analysisInsufficientReasons"]
+        assert body["analysisInsufficient"] is False
+
+
+def test_training_evaluate_requires_one_post_move_source(fake_settings):
+    with TestClient(create_app(fake_settings)) as client:
+        missing = client.post(
+            "/api/training/evaluate",
+            json={
+                "ply": 5,
+                "userMove": "J8",
+                "userColor": "B",
+                "preAnalysis": analysis_payload(),
+            },
+        )
+        assert missing.status_code == 422
+
+        duplicate = client.post(
+            "/api/training/evaluate",
+            json={
+                "ply": 5,
+                "userMove": "J8",
+                "userColor": "B",
+                "preAnalysis": analysis_payload(),
+                "postRootInfo": {"blackWinrate": 0.55, "visits": 100},
+                "terminalState": terminal_state(),
+            },
+        )
+        assert duplicate.status_code == 422
 
 
 def test_training_evaluate_rejects_move_missing_from_helper_legal_moves(fake_settings):

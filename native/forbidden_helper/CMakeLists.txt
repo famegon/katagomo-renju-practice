@@ -11,7 +11,9 @@ set(KATAGOMO_CPP "${PROJECT_ROOT}/vendor/KataGomo/cpp")
 add_executable(forbidden_helper
   main.cpp
   "${KATAGOMO_CPP}/game/board.cpp"
+  "${KATAGOMO_CPP}/game/boardhistory.cpp"
   "${KATAGOMO_CPP}/game/gamelogic.cpp"
+  "${KATAGOMO_CPP}/game/rules.cpp"
   "${KATAGOMO_CPP}/forbiddenPoint/ForbiddenPointFinder.cpp"
   "${KATAGOMO_CPP}/core/global.cpp"
   "${KATAGOMO_CPP}/core/hash.cpp"
@@ -23,6 +25,7 @@ add_executable(forbidden_helper
 )
 
 target_include_directories(forbidden_helper PRIVATE "${KATAGOMO_CPP}")
+target_compile_definitions(forbidden_helper PRIVATE NOVCF)
 target_compile_options(forbidden_helper PRIVATE -ffunction-sections -fdata-sections)
 
 if(APPLE)
@@ -30,4 +33,3 @@ if(APPLE)
   # VCF solver sections so this focused helper only links the Board path it calls.
   target_link_options(forbidden_helper PRIVATE "-Wl,-dead_strip")
 endif()
-

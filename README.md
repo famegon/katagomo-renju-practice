@@ -1,15 +1,255 @@
-# KataGomo 기반 오목 초반 연습 프로그램
+# KataGomo Renju Practice
 
-현재는 **Stage 1 엔진 검증, 제한된 Stage 1.5 OpenCL 검증, Stage 2 분석 서버, Stage 3 보드 UI, Stage 4 반복 연습·채점, Stage 5 실행 재현성 검증까지 완료**된 상태다. 공식 KataGomo `Gom2024` 소스와 공식 Renju `b28c512nbt` 모델만 사용한다. Apple M5에서 CPU/Eigen과 OpenCL 모두 실제 모델 로딩·15×15 Renju 분석을 통과했으며, FastAPI 서버가 한 개의 persistent analysis 프로세스를 관리하고 실제 중간/최종 JSON을 WebSocket으로 보낸다. 흑/백 AI 연습, 6~16수 종료, 수별 평가와 반복 기록이 동작한다. 금수는 프로젝트가 재구현하지 않고 공식 `Board::isForbidden()`을 호출한다.
+> 로컬 15×15 Renju 연습 플랫폼
 
-공식 기준 자료:
+KataGomo Renju Practice는 공식 [KataGomo](https://github.com/hzyhhzy/KataGomo) 엔진과 공개 Renju 신경망을 그대로 사용해, Mac에서 혼자 수를 놓고 실시간 분석을 확인하는 데스크톱 웹 앱이다. 별도 계정이나 클라우드 서버 없이 `127.0.0.1`에서 실행된다.
+
+이 프로젝트의 범위는 명확하다.
+
+- 보드는 항상 **15×15**다.
+- 규칙은 항상 **Renju**다. Freestyle, Standard, Caro 전환 기능은 제공하지 않는다.
+- 흑부터 교대로 착수하는 분석·연습 도구이며 별도의 대회 오프닝 프로토콜을 자동 진행하지 않는다.
+- 새로운 신경망이나 MCTS를 구현하지 않는다. KataGomo의 raw policy와 MCTS 결과를 보여준다.
+- 흑 금수와 공식 종국은 브라우저에서 재구현하지 않고 KataGomo 공식 C++ 코드로 판정한다.
+- 데스크톱 사용을 대상으로 하며 모바일 UI는 현재 범위가 아니다.
+
+## 제공 기능
+
+- **AI와 연습:** 사용자가 흑 또는 백을 맡고 AI가 반대쪽을 둔다.
+- **양쪽 직접 두기:** 사용자 색을 정하지 않고 흑·백을 번갈아 놓으며 원하는 위치를 분석한다.
+- **공식 금수·종국 판정:** 흑의 3×3, 4×4, 장목과 승리·금수패·무승부를 공식 KataGomo 코드로 판정한다.
+- **실시간 분석:** 검색 도중과 최종 결과의 Raw policy, Visits, Visit share, Winrate (Black), PV, Order, Root visits를 표시한다.
+- **후보 비교:** policy와 MCTS visits를 합치지 않고 별도로 보여준다.
+- **반복 연습:** 6, 8, 10, 12, 14, 16수 종료 또는 제한 없이 진행할 수 있다. 실제 종국은 선택한 수 제한보다 항상 우선한다.
+- **기록과 복기:** 수별 추천 수, policy/visit 순위, 승률 변화와 큰 실수를 확인하고 읽기 전용 복기판에서 다시 살펴본다.
+
+완료한 연습은 현재 브라우저의 `localStorage` 키 `katagomo.renjuPractice.v2`에 최신 20판까지 저장된다. 각 사용자 수 직전 최종 분석의 Order 기준 상위 10개 후보와 PV만 compact snapshot으로 보존하고, 226개 전체 policy 배열은 반복 저장하지 않는다. 기존 `katagomo.openingPractice.v1` 기록은 자동 변환하며 v2 저장소 자체가 손상된 경우에도 v1을 복구 후보로 사용하고 진단을 화면에 남긴다. 기록별 삭제와 전체 삭제가 가능하다.
+
+복기판에서는 처음·이전·다음·마지막 수로 이동하고 당시 수별 평가, 후보, PV와 큰 실수 위치를 확인한다. 복기만 하는 동안 라이브 보드는 바뀌지 않으며, 사용자가 명시적으로 **이 위치에서 연습**을 누른 비종국 위치만 새 연습 시작점으로 복사한다. 기록은 다른 브라우저·프로필과 자동 동기화되지 않으며 사이트 데이터를 지우면 함께 삭제된다.
+
+## 요구 환경
+
+현재 지원·검증 대상은 macOS 데스크톱이다.
+
+| 항목 | 요구 사항 |
+|---|---|
+| macOS | 데스크톱 macOS. Apple Silicon M5에서 검증했으며 Intel Mac은 아직 실기 검증하지 않았다. |
+| Homebrew | CMake, Eigen, jq 설치에 사용 |
+| Python | 기존에 설치된 안정적인 CPython **3.11 이상** |
+| Node.js | 18 이상. 브라우저 단위 테스트 실행에 필요 |
+| Compiler | Apple Command Line Tools의 C++17 compiler |
+| 디스크 | 모델 약 257 MiB, 엔진 소스·빌드·가상환경을 위한 추가 여유 공간 |
+
+특정 Python 버전을 새로 설치하지 않는다. `make setup`은 현재 `python3`가 3.11 이상인지 확인하고 프로젝트 전용 `.venv`를 만든다. 이 저장소에서 실제 검증한 버전은 CPython 3.14.6이다.
+
+처음 설치하는 Mac이라면 아래 두 명령으로 Apple Command Line Tools와 Homebrew가 준비됐는지 먼저 확인한다. 명령이 없다고 나오면 Command Line Tools는 `xcode-select --install`로 설치하고, Homebrew는 [공식 설치 안내](https://brew.sh/)를 따른다.
+
+```bash
+xcode-select -p
+brew --version
+```
+
+## 처음 설치
+
+GitHub에서 저장소를 clone한 뒤 프로젝트 루트에서 실행한다. 첫 명령은 Homebrew로 `cmake`, `eigen`, `jq`를 설치하고 Python 패키지를 `.venv`에 설치한다. 모델 다운로드는 269,873,929 bytes(약 257 MiB)다.
+
+```bash
+make setup
+make engine
+make model
+make forbidden-helper
+make smoke
+```
+
+각 명령의 역할은 다음과 같다.
+
+- `make setup`: 필요한 최소 Homebrew 패키지와 `.venv` 의존성 준비
+- `make engine`: 고정된 공식 KataGomo 커밋을 가져와 CPU/Eigen 엔진 빌드
+- `make model`: 공식 Renju b28c512nbt 모델만 다운로드하고 크기·gzip·SHA-256 검증
+- `make forbidden-helper`: 공식 `BoardHistory`와 `Board::isForbidden()`을 사용하는 position helper 빌드
+- `make smoke`: 실제 엔진·실제 모델로 15×15 Renju JSONL 분석 검증
+
+기존 소스 디렉터리의 remote/commit이 다르거나 로컬 변경이 있으면 스크립트는 덮어쓰지 않고 중단한다. 기존 모델의 크기나 해시가 다를 때도 파일을 교체하지 않는다.
+
+## 실행과 종료
+
+```bash
+make dev
+```
+
+브라우저에서 [http://127.0.0.1:8000](http://127.0.0.1:8000)을 연다. `localhost` 대신 위 주소를 그대로 사용하는 편이 명확하다.
+
+연습 기록은 브라우저 origin별로 저장된다. 따라서 `127.0.0.1:8000`과 `127.0.0.1:8001`, 또는 `localhost:8000`은 서로 다른 기록 저장소로 보인다. 기존 기록을 계속 보려면 같은 주소와 포트를 사용한다.
+
+종료할 때는 `make dev`를 실행한 터미널에서 `Ctrl-C`를 누른다. FastAPI 서버가 끝날 때 persistent KataGomo analysis 프로세스에도 종료를 전달한다.
+
+기본 백엔드는 **CPU/Eigen**이다. 빌드 디렉터리에 OpenCL 실행 파일이 있더라도 자동 선택하지 않는다. 이 기본값은 가장 빠른 설정이라는 뜻이 아니라, macOS에서 재현 가능한 안전한 설정이라는 뜻이다.
+
+## 기본 사용법
+
+앱에서 연습 방식과 분석량을 고르고 보드의 교차점을 누르면 된다. UI의 구체적인 배치는 바뀔 수 있지만 기능 계약은 다음과 같다.
+
+- AI 연습에서는 흑 또는 백을 선택한다. AI는 최종 검색 결과의 `order=0` 후보만 자동 착수한다.
+- 양쪽 직접 두기에서는 AI 자동 착수와 사용자 색 채점을 끄고 두 색을 직접 둔다.
+- 기본 분석량은 100 visits이며 더 깊은 확인에는 500 visits를 선택할 수 있다.
+- 후보 수와 원 크기 기준을 바꾸어 Raw policy와 Visit share를 따로 비교할 수 있다.
+- 후보를 가리키거나 선택하면 PV 예상 수순을 보드에서 확인할 수 있다.
+- 흑 금수는 표시되고 클릭이 차단된다. helper가 실패하면 임의 판정 대신 안전하게 착수와 분석을 막는다.
+- 수 제한에 도달하거나 공식 종국이 되면 결과와 수별 평가를 정리한다.
+
+## 분석 용어
+
+KataGomo와 다른 분석 도구에서 통용되는 용어를 그대로 사용한다.
+
+| 용어 | 이 앱에서의 의미 |
+|---|---|
+| **Raw policy** | 신경망이 MCTS 검색 전에 각 착수에 준 원시 확률이다. 전체 226개 policy 배열에서 해당 교차점 값을 읽는다. 검색 결과인 Visits와 같은 값이 아니다. |
+| **Visits** | MCTS가 한 후보를 탐색한 횟수다. 높을수록 검색이 그 후보에 더 많은 계산을 사용했다는 뜻이지, 그 자체가 승률은 아니다. |
+| **Visit share** | `후보 visits / 반환된 모든 후보 visits 합`이다. 후보별 검색 비중을 비교하기 위한 값이며 Root visits를 분모로 쓰지 않는다. 분모가 0이면 0으로 표시하고 분석 부족으로 취급한다. |
+| **Winrate (Black)** | 흑이 이길 것으로 보는 확률이다. 항상 **흑 관점**이므로 현재 차례가 백이어도 의미가 뒤집히지 않는다. 예를 들어 70%는 누가 둘 차례인지와 무관하게 흑 70%다. 백 관점은 `1 - Black winrate`다. |
+| **PV** | Principal Variation. 해당 후보 뒤에 엔진이 가장 유력하다고 본 예상 진행 수순이다. 정답 수순을 보장하는 것은 아니다. |
+| **Order** | KataGomo 검색이 반환한 추천 순서다. 원시 필드는 0부터 시작해 `order=0`이 첫 추천이다. Visits 순위와 반드시 같지는 않는다. |
+| **Root visits** | 현재 위치 전체(root)에 사용된 MCTS visits다. 병렬 검색의 진행 중 평가 때문에 설정한 `maxVisits`를 조금 넘을 수 있고, 후보 visits 합과 정확히 같지 않을 수 있다. |
+
+가장 직접적인 형세 지표는 Winrate (Black)이지만, 작은 visits에서는 값이 흔들릴 수 있다. 이 앱은 추천 수와의 승률 차이, visit 순위, raw policy, 실제 분석량을 함께 보여주고 분석량이 부족하면 확정적인 점수 대신 `분석 부족`으로 표시한다.
+
+## Renju 판정의 기준
+
+브라우저나 Python에서 Renju 금수 로직을 따로 만들지 않는다. `native/forbidden_helper/`가 수정하지 않은 공식 KataGomo translation unit에 링크된다.
+
+- 진행 중 금수: 공식 `Board::isForbidden()`
+- 승리·금수패·무승부: 공식 `BoardHistory::makeBoardMoveAssumeLegal()`과 `GameLogic`
+- 규칙 객체: 15×15 Renju, NOVC, `firstPassWin=false`
+- 최대 수: position helper에서 225로 두어 공식 full-board 무승부를 얻는다.
+- analysis 엔진: 신경망 입력과 검색 동작을 바꾸지 않도록 `maxmoves=0` 계약을 유지한다.
+
+position 응답은 `isTerminal`, `winner`, `outcome`, `terminalReason`, `terminalMove`, `forbiddenMoves`, `legalMoves`를 포함한다. 종료 사유는 `line_win`, `black_forbidden`, `board_full` 중 하나다. 종국이 되면 합법/금수 목록은 비고 추가 착수와 분석을 막는다.
+
+KataGomo analysis의 `noResults=true`는 승패 신호가 아니다. 요청이 취소·중단되어 검색 결과를 만들지 못한 상태로 처리하며 `analysisState=canceled`로 표시한다. 공식 종국은 analysis를 시작하기 전에 position helper로 판정한다.
+
+## 백엔드 선택
+
+### CPU/Eigen — 기본값
+
+```bash
+make engine
+make dev
+```
+
+CPU/Eigen은 GPU 권한이나 deprecated API에 의존하지 않으며 통합 테스트의 기준 백엔드다. 현재 설정은 8 search threads를 사용한다. 검증 호스트의 100 visits 검색은 단일 측정에서 약 4.9초였으므로, 하드웨어에 따라 실시간 감각은 달라질 수 있다.
+
+### OpenCL — opt-in 실험 기능
+
+KataGomo `Gom2024`에는 Apple Metal 백엔드가 없고 OpenCL만 있다. Apple의 OpenCL은 deprecated 상태이며 실행 환경과 호스트 상태에 민감하므로 자동 fallback이나 기본값으로 사용하지 않는다.
+
+```bash
+make opencl
+
+KATAGOMO_ENGINE="$PWD/build/engine-opencl/katago" \
+KATAGOMO_ANALYSIS_CONFIG="$PWD/config/analysis-opencl.cfg" \
+make dev
+```
+
+이 설정은 두 환경변수를 반드시 함께 지정해야 한다. 실행 후 `/api/status`와 실제 분석으로 장치 열거, 모델 로딩, 15×15 Renju 결과까지 확인해야 한다. configure 성공이나 `katago version`만으로는 동작한다고 판단하지 않는다.
+
+Apple M5에서 한 차례 네이티브 실추론과 benchmark에 성공해 CPU보다 약 4배 빠른 기록을 얻었지만, 같은 호스트의 최신 재실행에서는 장치 열거 단계가 `CL_INVALID_VALUE`로 실패했다. 따라서 OpenCL은 과거 측정값을 보존하되 현재 기본에서 제외했다. 실패하면 두 환경변수를 제거하고 CPU/Eigen으로 실행한다.
+
+Metal 포팅은 이 프로젝트에서 시작하지 않았다.
+
+## 환경변수
+
+쉘에서 직접 지정한다. `.env.example`은 값의 예시이며 현재 실행 스크립트가 `.env`를 자동으로 읽지는 않는다.
+
+| 환경변수 | 기본값/용도 |
+|---|---|
+| `KATAGOMO_ENGINE` | `build/engine-eigen/katago` |
+| `KATAGOMO_MODEL` | `models/zhizi_renju28b_s1600.bin.gz` |
+| `KATAGOMO_ANALYSIS_CONFIG` | `config/analysis.cfg` |
+| `KATAGOMO_FORBIDDEN_HELPER` | `build/forbidden-helper/forbidden_helper` |
+| `KATAGOMO_ENGINE_LOG` | `artifacts/stage2/engine-stderr.log` |
+| `KATAGOMO_PORT` | 로컬 서버 포트, 기본 `8000` |
+| `KATAGOMO_WEBSOCKET_URL` | `make websocket-smoke`가 사용할 전체 WebSocket URL |
+
+예를 들어 다른 포트에서 CPU/Eigen을 실행하려면 다음처럼 지정한다.
+
+```bash
+KATAGOMO_PORT=8001 make dev
+```
+
+외부 경로의 검증된 엔진과 모델을 사용할 수도 있다.
+
+```bash
+KATAGOMO_ENGINE=/absolute/path/to/katago \
+KATAGOMO_MODEL=/absolute/path/to/zhizi_renju28b_s1600.bin.gz \
+KATAGOMO_ANALYSIS_CONFIG=/absolute/path/to/analysis.cfg \
+make dev
+```
+
+서버 시작 때 모델의 크기, gzip stream, SHA-256을 다시 확인한다.
+
+## 문제 해결
+
+- **Chrome에 이전 화면이 보임:** `/`와 `/static/*`은 서버가 `Cache-Control: no-store`로 보낸다. 그래도 이미 열린 탭이 오래된 자산을 잡고 있으면 서버를 `Ctrl-C`로 종료하고 `make dev`로 다시 시작한 뒤 Chrome에서 `Cmd-Shift-R`로 강력 새로고침한다.
+- **Chrome에서 연결되지 않음:** `http://127.0.0.1:8000`을 직접 열고 터미널의 서버 시작 메시지를 확인한다. 다른 포트를 사용했다면 주소도 같은 포트로 바꾼다.
+- **`session_busy`:** 연결 실패가 아니라 다른 탭이 실제 분석 lease를 사용 중이라는 뜻이다. 오래된 탭을 닫거나 진행 중 분석을 끝낸 뒤 다시 시도한다. idle 탭은 여러 개 연결할 수 있다.
+- **모델 오류:** `make verify-model`로 크기, SHA-256, gzip stream을 확인하고 `make smoke`로 실제 모델 로딩을 확인한다.
+- **helper 누락/오류:** `make forbidden-helper`를 실행한다. helper가 정상화되기 전에는 가짜 금수·종국 값으로 대체하지 않는다.
+- **CPU 엔진 누락:** `make engine`을 실행한다.
+- **OpenCL `CL_INVALID_VALUE` 또는 모델 로딩 실패:** OpenCL opt-in 환경변수를 제거하고 CPU/Eigen으로 돌아간다.
+- **포트 충돌:** `KATAGOMO_PORT=8001 make dev`처럼 다른 포트를 사용한다.
+- **엔진 로그:** `artifacts/stage2/engine-stderr.log`와 `artifacts/stage2/engine-invalid-stdout.log`를 확인한다.
+
+## 테스트
+
+```bash
+make test
+make integration-test
+```
+
+`make test`는 JavaScript 상태/기록 규칙과 Python 단위·프로세스·API/WebSocket 테스트를 실행한다. `make integration-test`는 mock이 아닌 CPU/Eigen KataGomo 엔진과 공식 모델로 실제 분석을 수행한다.
+
+추가 진단 명령:
+
+```bash
+make benchmark
+make benchmark-threads
+make compare-visits
+make dev                  # 별도 터미널에서 유지
+make websocket-smoke
+```
+
+> 최종 회귀 기록(2026-09-01): 웹 상태·저장·DOM 테스트 50 passed, Python 테스트 97 passed / 1 deselected, 실제 CPU/Eigen 엔진·공식 모델 통합 테스트 1 passed / 97 deselected.
+
+## 배포 파일과 라이선스
+
+이 저장소의 로컬 서버, UI, build adapter와 테스트는 [MIT License](LICENSE)로 배포한다. 외부 구성요소와 모델 출처는 [Third-party notices](THIRD_PARTY_NOTICES.md)를 확인한다.
+
+다음 파일은 Git에 커밋하거나 이 프로젝트의 산출물로 재배포하지 않는다.
+
+- `vendor/KataGomo/` 공식 엔진 checkout
+- `models/*.bin.gz` 신경망 가중치
+- `build/` 엔진과 helper 빌드 결과
+- `artifacts/`, `logs/`, `*.log` 실행·분석 로그
+- `.venv/`, `node_modules/` 로컬 의존성
+
+`make engine`과 `make model`이 사용자의 컴퓨터에서 공식 소스와 공식 릴리스 자산을 직접 가져온다. 모델의 URL과 무결성 메타데이터만 `models/MANIFEST.json`에 추적한다. KataGomo, KataGo와 모델 저자는 이 UI와 제휴하거나 이를 보증하지 않는다.
+
+---
+
+## 검증 및 기술 세부사항
+
+아래 내용은 개발·재현·감사를 위한 기록이다. 처음 사용하는 경우 위의 설치와 실행 절차만 따르면 된다.
+
+### 공식 소스와 고정 버전
 
 - [KataGomo 저장소 `Gom2024`](https://github.com/hzyhhzy/KataGomo/tree/Gom2024)
 - [Gomoku_20250206 릴리스](https://github.com/hzyhhzy/KataGomo/releases/tag/Gomoku_20250206)
 - [Analysis Engine 문서](https://github.com/hzyhhzy/KataGomo/blob/Gom2024/docs/Analysis_Engine.md)
 - 사용 엔진 커밋: [`df152116e3787c75c6a3de099d261ca092b7dfc1`](https://github.com/hzyhhzy/KataGomo/commit/df152116e3787c75c6a3de099d261ca092b7dfc1)
 
-## 확인한 Mac 환경
+공식 소스는 지정 커밋에 고정된 clean checkout으로 유지한다. 프로젝트 쪽 CMake target과 helper만 공식 translation unit에 링크한다.
+
+### 검증 호스트
 
 2026-08-31(KST)에 실제 명령으로 확인했다. 일련번호와 UUID 같은 장치 식별자는 기록하지 않았다.
 
@@ -21,21 +261,21 @@
 | GPU | Apple M5 내장 GPU, 10코어; 시스템 Metal 지원 |
 | 메모리 | 24 GB |
 | macOS | 26.6.2, build `25G83`, Darwin `25.6.0` |
-| Homebrew | 최초 확인 6.0.19, 패키지 설치 후 현재 6.0.20, `/opt/homebrew` |
-| CMake | 최초 미설치 → Homebrew 4.4.3 설치 |
+| Homebrew | 최초 6.0.19, 패키지 설치 후 6.0.20, `/opt/homebrew` |
+| CMake | 최초 미설치 → Homebrew 4.4.3 |
 | C++ compiler | Apple Clang 21.0.0, ARM64 target |
 | Command Line Tools | `/Library/Developer/CommandLineTools` |
-| Eigen | 최초 미설치 → Homebrew 5.0.1 설치 |
-| zlib | macOS SDK 1.2.12 사용 |
+| Eigen | 최초 미설치 → Homebrew 5.0.1 |
+| zlib | macOS SDK 1.2.12 |
 | libzip | 미설치; 분석/GTP에는 선택 사항 |
 | Git | Apple Git 2.50.1 |
 | Python | 기존 CPython 3.14.6 (`/Library/Frameworks/Python.framework/Versions/3.14/bin/python3`) |
 | 프로젝트 venv | `.venv`, CPython 3.14.6, pip 26.1.2, system site-packages 미사용 |
 | Node / npm | Node 24.18.0 / npm 11.16.0 |
-| jq | 1.8.2, 기존 설치됨; smoke JSON 계약 검증에 사용 |
-| Ninja / pkg-config | 미설치; 이번 Makefile 빌드에는 불필요 |
+| jq | 1.8.2, 기존 설치됨 |
+| Ninja / pkg-config | 미설치; Makefile 빌드에는 불필요 |
 
-네이티브 빌드를 위해 새로 설치한 것은 `cmake`(67.2 MB)와 `eigen`(10.2 MB)뿐이다. `jq`와 CPython 3.14.6은 이미 설치되어 있어 새 Python을 설치하지 않았다. 기존 `python3`로 프로젝트 전용 `.venv`를 만들고 Stage 2 의존성을 그 안에만 설치했다.
+새로 설치한 native package는 `cmake`(67.2 MB)와 `eigen`(10.2 MB)이었다. jq와 Python은 기존 환경을 재사용했다.
 
 | Python 패키지 | 검증 버전 |
 |---|---:|
@@ -47,70 +287,11 @@
 | httpx2 | 2.12.0 |
 | pytest / pytest-asyncio | 9.1.1 / 1.4.0 |
 
-CPython 3.14.6에서 설치, import, 서버 기동, WebSocket, 테스트까지 실제로 통과했다. Python 호환성 문제는 발견되지 않았다.
+CPython 3.14.6에서 설치, import, 서버 기동, WebSocket과 테스트까지 실제로 통과했으며 Python 호환성 문제는 발견되지 않았다. `requirements-lock.txt`는 이 호스트에서 검증한 direct/transitive 패키지를 고정하고, `requirements.txt`와 `requirements-dev.txt`는 직접 의존성 목록으로 유지한다.
 
-## 빠른 재현
+### CPU/Eigen 빌드
 
-모든 명령은 이 README가 있는 프로젝트 루트에서 실행한다.
-
-```bash
-make setup       # cmake/eigen/jq + 기존 Python 3.11 이상 .venv와 고정된 Python 의존성
-make engine      # 공식 커밋을 가져와 ARM64 CPU/Eigen 엔진 빌드
-make opencl      # macOS OpenCL 엔진 빌드(이 Mac에서 실추론 검증됨)
-make model       # 공식 모델 269,873,929바이트 다운로드 및 검증
-make forbidden-helper # 공식 Board::isForbidden() 기반 helper 빌드
-make smoke       # 실제 15x15 Renju JSONL 분석
-make benchmark   # 8 threads, 100/500/1000 visits 순차 측정(약 2분)
-make benchmark-threads # 100 visits에서 1/2/4/6/8/10 threads 비교
-make dev         # persistent 엔진 + FastAPI + 연습 UI, http://127.0.0.1:8000
-make test        # helper 포함 단위/프로세스/WebSocket 테스트
-make integration-test # 실제 Eigen 엔진·실제 모델 통합 테스트
-make compare-visits   # 실제 100/500 visits 후보 분포 기록
-```
-
-`make model`은 약 257 MiB를 받는다. 다른 릴리스 묶음이나 Windows 실행 파일은 받지 않는다. 기존 엔진 디렉터리의 커밋이 다르거나 기존 모델의 해시가 다르면 스크립트는 덮어쓰지 않고 중단한다.
-
-`requirements-lock.txt`는 이 Mac에서 검증한 direct/transitive Python 패키지를 모두 고정한다. `requirements.txt`와 `requirements-dev.txt`는 사람이 관리하는 직접 의존성 목록이고, 업그레이드할 때만 lock을 의도적으로 다시 만든다.
-
-현재 설치를 다시 확인하기만 하려면 다음으로 충분하다.
-
-```bash
-make verify-model
-build/engine-eigen/katago version
-make smoke
-```
-
-기본 경로를 바꿀 때는 다음 환경변수를 쓸 수 있다. `make dev`는 선택된 모델의 크기·gzip·SHA-256을 시작할 때마다 검증한다.
-
-```bash
-KATAGOMO_ENGINE=/absolute/path/to/katago \
-KATAGOMO_MODEL=/absolute/path/to/zhizi_renju28b_s1600.bin.gz \
-make smoke
-```
-
-| 환경변수 | 기본값/용도 |
-|---|---|
-| `KATAGOMO_ENGINE` | OpenCL 빌드가 있으면 이를 사용하고, 없으면 `build/engine-eigen/katago` |
-| `KATAGOMO_MODEL` | `models/zhizi_renju28b_s1600.bin.gz` |
-| `KATAGOMO_ANALYSIS_CONFIG` | 선택한 backend의 `config/analysis*.cfg` |
-| `KATAGOMO_FORBIDDEN_HELPER` | `build/forbidden-helper/forbidden_helper` |
-| `KATAGOMO_ENGINE_LOG` | `artifacts/stage2/engine-stderr.log` |
-| `KATAGOMO_PORT` | 서버 포트 `8000` |
-| `KATAGOMO_WEBSOCKET_URL` | smoke에서 쓸 전체 WebSocket URL; 생략하면 `KATAGOMO_PORT`를 따른다 |
-
-`make dev`는 정식 `build/engine-opencl/katago`가 있으면 이를 우선하고, 없으면 CPU/Eigen으로 내려간다. 종료는 실행 중인 터미널에서 `Ctrl-C`를 누른다. 서버가 끝날 때 analysis 자식 프로세스에도 terminate/EOF를 보내고 제한 시간 뒤에만 강제 종료한다.
-
-CPU/Eigen을 명시적으로 선택하려면 두 경로를 함께 지정한다.
-
-```bash
-KATAGOMO_ENGINE="$PWD/build/engine-eigen/katago" \
-KATAGOMO_ANALYSIS_CONFIG="$PWD/config/analysis.cfg" \
-make dev
-```
-
-## 엔진 빌드 결과
-
-빌드는 공식 소스를 수정하지 않은 out-of-source 방식이다.
+확인한 실행 파일 정보:
 
 ```text
 KataGo v1.12.4
@@ -119,9 +300,7 @@ Using Eigen(CPU) backend
 Compiled to allow boards of size up to 15
 ```
 
-결과 실행 파일은 `build/engine-eigen/katago`이며 `Mach-O 64-bit executable arm64`로 확인했다. 동적 링크는 macOS의 `libz`, `libc++`, `libSystem`뿐이다.
-
-재현용 핵심 CMake 옵션은 다음과 같다.
+`build/engine-eigen/katago`는 `Mach-O 64-bit executable arm64`이며 macOS의 `libz`, `libc++`, `libSystem`에 동적 링크된다. 빌드는 공식 소스를 수정하지 않는 out-of-source 방식이다.
 
 ```bash
 cmake -S vendor/KataGomo/cpp -B build/engine-eigen \
@@ -134,20 +313,11 @@ cmake -S vendor/KataGomo/cpp -B build/engine-eigen \
 cmake --build build/engine-eigen --parallel
 ```
 
-Apple Silicon에는 AVX2가 없으므로 반드시 껐다. Homebrew Eigen 5의 CMake package가 이 오래된 CMakeLists의 `EIGEN3_INCLUDE_DIRS` 변수를 채우지 않아 include 경로를 명시했다.
+Apple Silicon에는 AVX2가 없어 껐다. Homebrew Eigen 5의 CMake package가 오래된 CMakeLists의 `EIGEN3_INCLUDE_DIRS`를 채우지 않아 include 경로를 명시했다.
 
-### 백엔드 조사
+고정 커밋의 [CMake 백엔드 목록](https://github.com/hzyhhzy/KataGomo/blob/df152116e3787c75c6a3de099d261ca092b7dfc1/cpp/CMakeLists.txt#L28-L100)은 `CUDA`, `TENSORRT`, `OPENCL`, `EIGEN`뿐이다. Metal option과 구현 파일은 없다. CUDA/TensorRT는 NVIDIA 전용이므로 Apple M5 네이티브 선택지가 아니다. 최신 일반 KataGo의 Metal 코드는 Swift, CoreML/MPSGraph와 새 CMake 구조를 함께 사용하므로 옵션 한 줄을 옮기는 작업이 아니며 이 프로젝트에서는 포팅하지 않았다.
 
-고정 커밋의 [CMake 백엔드 목록](https://github.com/hzyhhzy/KataGomo/blob/df152116e3787c75c6a3de099d261ca092b7dfc1/cpp/CMakeLists.txt#L28-L100)은 `CUDA`, `TENSORRT`, `OPENCL`, `EIGEN`뿐이다.
-
-- **Metal:** 이 `Gom2024` 소스에는 옵션도 구현 파일도 없다. Mac 시스템이 Metal을 지원한다는 사실과 KataGomo가 Metal을 지원한다는 것은 별개다.
-- **OpenCL:** [OpenCL CMake 경로](https://github.com/hzyhhzy/KataGomo/blob/df152116e3787c75c6a3de099d261ca092b7dfc1/cpp/CMakeLists.txt#L328-L346)와 [Apple 전용 OpenCL 헤더 경로](https://github.com/hzyhhzy/KataGomo/blob/df152116e3787c75c6a3de099d261ca092b7dfc1/cpp/neuralnet/openclincludes.h#L4-L12)를 사용해 실제 Apple M5 GPU 열거, 모델 로딩, Renju 분석, 100/500 visits benchmark까지 통과했다. Apple은 [OpenCL을 deprecated로 표시](https://developer.apple.com/opencl/)하므로 Eigen은 계속 fallback으로 유지한다.
-- **CUDA/TensorRT:** NVIDIA 전용이므로 이 Apple M5의 네이티브 선택지가 아니다.
-- **Eigen:** 이번 단계에서 실제 빌드와 추론을 통과한 기준 백엔드다.
-
-최신 일반 KataGo의 Metal 코드는 Swift, CoreML/MPSGraph, 새 CMake 구조를 함께 쓰므로 옵션 한 줄을 복사하는 수준이 아니다. KataGomo로의 포팅은 별도 코드 차이 분석과 검증이 필요한 대형 작업이며 시작하지 않았다.
-
-## 모델 검증
+### 모델 무결성
 
 | 항목 | 값 |
 |---|---|
@@ -158,16 +328,15 @@ Apple Silicon에는 AVX2가 없으므로 반드시 껐다. Homebrew Eigen 5의 C
 | gzip 원본 크기 | 291,522,074 bytes |
 | 모델 버전 | 102 |
 | 로딩된 모델 이름 | `zhizigo_renju28b-b28c512nbt-s1617930240-d2051476833` |
+| 릴리스 대상 커밋 | `9cb3546a8107ff0547def7d9d9a367de6c997355` |
 
-GitHub 자산 메타데이터에는 이 독립 모델의 digest가 없어 SHA-256은 다운로드 후 로컬에서 계산했다. 크기, gzip 무결성, SHA-256, 압축 해제 헤더, 엔진 로딩 로그를 각각 확인했다. 릴리스 본문은 `b28c512nbt`와 Renju/Freestyle/Standard/Caro를 명시하며, 독립 `.bin.gz` 자산명과 엔진의 모델 이름에도 `renju28b`가 들어간다. 일반 바둑용 b28 모델은 사용하지 않았다. 전체 메타데이터는 `models/MANIFEST.json`에 있다.
+GitHub release asset metadata에는 digest가 없어 SHA-256은 다운로드 후 로컬에서 계산했다. 크기, gzip 무결성, SHA-256, 압축 해제 헤더와 엔진 로딩 로그를 각각 확인했다. 릴리스 본문은 `b28c512nbt`와 Renju/Freestyle/Standard/Caro를 명시하고, 독립 자산명과 엔진의 모델 이름에도 `renju28b`가 들어간다. 일반 바둑용 b28 모델은 사용하지 않았다. 전체 메타데이터는 `models/MANIFEST.json`에 있다.
 
-모델 파일과 빌드 결과는 `.gitignore` 대상이다.
+### CPU benchmark
 
-## CPU benchmark
+조건은 15×15 빈 시작 포지션, 공식 `benchmark` 명령, Eigen, `nnRandomize=false`, 단일 포지션, b28c512nbt다. `benchmarks/empty-15.sgf`에서 첫 수 직전 빈 판을 결정적으로 선택했다.
 
-조건은 15×15 빈 시작 포지션, 공식 `benchmark` 명령, Eigen, `nnRandomize=false`, 단일 포지션, b28c512nbt다. 테스트 SGF는 `benchmarks/empty-15.sgf`이며 첫 수 직전의 빈 판을 결정적으로 선택하게 만들었다.
-
-100 visits 스레드 비교:
+100 visits thread 비교:
 
 | search threads | visits/s | 검색 시간 |
 |---:|---:|---:|
@@ -186,21 +355,34 @@ GitHub 자산 메타데이터에는 이 독립 모델의 digest가 없어 SHA-25
 | 500 | 22.51 | 22.5 s |
 | 1000 | 21.68 | 46.5 s |
 
-각 실행의 모델 초기화 시간은 위 검색 시간에 포함되지 않는다. 모델 로딩은 로그상 약 3~4초였다. 수치는 이 Mac에서 보존한 단일 측정값이며 추측값이 아니다. 10-thread sweep은 10개 Eigen server 중 하나에만 평가가 몰리며 4.80 visits/s로 급락한 실제 이상 측정이었다. 더 좋은 값으로 치환하지 않았으며, 8 threads를 기본값으로 유지한다. 같은 8-thread 100-visits도 별도 실행에서는 21.68 visits/s였으므로 짧은 단일 포지션 값에는 실행 간 변동이 있다.
+모델 초기화 시간은 검색 시간에 포함하지 않았고 로그상 약 3~4초였다. 이는 한 Mac에서 보존한 단일 실측값이며 추정치가 아니다. 10-thread sweep은 평가가 한 Eigen server에 몰려 4.80 visits/s로 급락했으며 더 좋은 값으로 바꾸지 않았다. 같은 8-thread 100 visits도 별도 실행에서는 21.68 visits/s였으므로 짧은 검색에는 실행 간 변동이 있다.
 
-`make benchmark`와 `make benchmark-threads`는 각 실행의 stdout/stderr 원문을 `artifacts/stage1/benchmark/*.log`에 남긴다. 이 디렉터리는 재생성 가능한 런타임 산출물이므로 Git에는 포함하지 않는다.
+원문은 `artifacts/stage1/benchmark/*.log`에 생성된다. Gom2024의 benchmark 구현은 SGF rule을 무시하고 내부 `Rules::getTrompTaylorish()`를 사용하며 여기서는 Freestyle 기본값이다. 따라서 이 표는 같은 15×15 네트워크와 MCTS 처리량 측정이지 Renju 규칙 품질 측정이 아니다. 기본 내장 SGF는 Gomoku에서 중간 종국 뒤 수가 이어져 `Illegal move in SGF`로 실패했고 별도 합법 시작 SGF를 사용했다. 실제 Renju 계약은 smoke와 통합 테스트로 검증한다.
 
-중요한 제한이 있다. 이 커밋의 benchmark 구현은 SGF의 rule을 무시하고 내부 `Rules::getTrompTaylorish()`를 사용하며, Gom2024에서 이는 Freestyle 기본값이다. 따라서 위 표는 **같은 15×15 네트워크와 MCTS의 처리량 측정**이지 Renju 규칙 품질 측정이 아니다. 기본 내장 benchmark SGF는 긴 바둑 수순이라 Gomoku에서 중간에 이미 종료되어 `Illegal move in SGF`로 실패했고, 이를 숨기지 않고 별도 합법 시작 SGF를 사용했다. 아래 smoke test는 실제 Renju 규칙 객체로 수행했다.
+### OpenCL 역사적 측정과 현재 상태
 
-## 실제 15×15 Renju 분석
+고정 소스에는 [OpenCL CMake 경로](https://github.com/hzyhhzy/KataGomo/blob/df152116e3787c75c6a3de099d261ca092b7dfc1/cpp/CMakeLists.txt#L328-L346)와 [Apple 전용 헤더 경로](https://github.com/hzyhhzy/KataGomo/blob/df152116e3787c75c6a3de099d261ca092b7dfc1/cpp/neuralnet/openclincludes.h#L4-L12)가 있다.
 
-요청은 `B H8, W H9` 다음 흑 차례이며, 문자열 `"RENJU"`가 아니라 Gom2024가 실제로 파싱하는 규칙 객체를 보낸다.
+2026-08-31 네이티브 실행에서는 Apple M5 GPU(`CL_DEVICE_TYPE_GPU`, type `0x4`)와 Apple OpenCL 1.2 platform을 열거하고, 같은 모델 로딩, `B H8, W H9` 15×15 Renju 분석과 100/500 visits benchmark까지 모두 성공했다.
+
+| Visits | CPU/Eigen | OpenCL | CPU 검색 시간 | OpenCL 검색 시간 | 당시 배속 |
+|---:|---:|---:|---:|---:|---:|
+| 100 | 21.68 visits/s | 95.68 visits/s | 4.9 s | 1.1 s | 4.41× |
+| 500 | 22.51 visits/s | 90.24 visits/s | 22.5 s | 5.6 s | 4.01× |
+
+첫 성공 실행은 약 40초 autotune 뒤 FP32 storage/compute로 동작했다. `nnMaxBatchSize=8`이 필요했고 FP16/tensor 경로는 `cl2Metal failed` 후 정상적으로 비활성화됐다. tuning 결과는 `artifacts/runtime/opencl/opencltuning/`, configure/build/device/model/analysis/benchmark 원문은 `artifacts/stage1_5/opencl/`에 남겼다.
+
+그러나 같은 Apple M5의 최신 재실행에서는 OpenCL 장치 열거가 `CL_INVALID_VALUE`로 실패해 모델 로딩과 Renju 분석까지 도달하지 못했다. 제한된 실행 환경에서도 같은 오류가 있었고, 이제 네이티브 재실행에서도 재현되었으므로 이 백엔드를 안정적인 기본으로 간주하지 않는다. 과거 성능 수치는 삭제하거나 성공으로 일반화하지 않고 역사적 측정으로만 보존한다. Apple은 OpenCL을 deprecated로 표시하고 있어 현재 정책은 **CPU/Eigen 기본, OpenCL 명시적 opt-in**이다.
+
+### 실제 15×15 Renju JSON
+
+Stage 1 smoke 위치는 `B H8, W H9` 다음 흑 차례다. 문자열 `"RENJU"`가 아니라 Gom2024가 파싱하는 규칙 객체를 보낸다.
 
 ```json
 {"id":"stage1-renju-100","moves":[["B","H8"],["W","H9"]],"rules":{"basicrule":"RENJU","vcnrule":"NOVC","firstpasswin":false,"maxmoves":0},"boardXSize":15,"boardYSize":15,"maxVisits":100,"analysisPVLen":8,"includePolicy":true,"reportDuringSearchEvery":1.0,"overrideSettings":{"reportAnalysisWinratesAs":"BLACK","wideRootNoise":0.0,"rootSymmetryPruning":false}}
 ```
 
-실제 실행에서 검색 도중 응답 5개와 최종 응답 1개가 stdout JSONL로 왔고, stderr에는 엔진 로그만 왔다. 모든 응답의 policy 길이는 `15×15+pass = 226`이었다. 최종 응답의 실제 일부는 다음과 같다. 생략 표시는 설명용이며 원본 JSON에는 없다.
+실제 실행에서 중간 응답 5개와 최종 응답 1개가 stdout JSONL로 왔고 stderr에는 엔진 로그만 왔다. policy는 모든 응답에서 `15×15+pass = 226`개였다. 최종 응답 일부:
 
 ```json
 {
@@ -227,74 +409,50 @@ GitHub 자산 메타데이터에는 이 독립 모델의 digest가 없어 SHA-25
 }
 ```
 
-전체 원본은 `artifacts/stage1/analysis-response.jsonl`에 있다. 정책 배열의 `H8`과 `H9` 인덱스는 실제로 `-1`, `G9` raw policy는 `0.158203125`였다. `maxVisits=100`보다 root visits가 107인 것은 8개 search thread의 진행 중 평가 때문에 소폭 overshoot한 결과다.
+전체 원본은 `artifacts/stage1/analysis-response.jsonl`에 있다. H8/H9 policy index는 `-1`, G9 Raw policy는 `0.158203125`였다. root visits 107이 설정 100보다 큰 것은 8 search threads의 진행 중 평가로 생긴 overshoot다. 재실행 시 visits 배분과 winrate 마지막 자릿수는 달라질 수 있으므로 검증은 숫자 하나가 아니라 필드, policy 길이와 중간/최종 계약을 확인한다.
 
-8-thread MCTS의 스케줄링 때문에 smoke를 다시 실행하면 visits 배분과 winrate의 마지막 자릿수는 조금 달라질 수 있다. 검증은 특정 숫자를 고정하지 않고 실제 필드, policy 길이, 중간/최종 응답 계약을 검사한다.
+`config/analysis.cfg`는 `reportAnalysisWinratesAs=BLACK`, `wideRootNoise=0.0`, `rootSymmetryPruning=false`다. `moveInfos[].prior`는 search prior로 별도 보존하며 UI의 Raw policy는 반드시 전체 `policy[coordinateIndex]`에서 읽는다.
 
-`config/analysis.cfg`는 승률을 **항상 흑 관점**으로 고정한다. 따라서 위 `winrate`는 현재 차례 관점이 아니라 흑 승률이다. UI에서는 이를 명시하고 필요할 때만 백 승률을 `1 - blackWinrate`로 계산해야 한다. `wideRootNoise=0.0`으로 두어 `moveInfos[].prior`와 전체 raw policy를 비교 가능하게 했고, `rootSymmetryPruning=false`로 대칭 복제 visits가 visit-share 분모를 왜곡하지 않게 했다.
+### 분석 서버 계약
 
-## 발견한 호환성 및 API 문제
+FastAPI lifespan 동안 KataGomo analysis 자식 프로세스 하나를 유지한다.
 
-1. `Compiling.md`의 CMake/C++ 요구사항은 낡았다. 실제 CMakeLists는 CMake 3.18.2와 C++17을 요구한다.
-2. Apple용 CMake가 `/usr/local/include`를 무조건 추가해 Apple Silicon에서 `no such include directory` 경고가 난다. Homebrew의 실제 prefix는 `/opt/homebrew`다.
-3. Eigen 5는 발견되지만 오래된 CMake 코드가 include 변수를 받지 못해 최초 빌드가 `Eigen/Dense file not found`로 실패했다. `EIGEN3_INCLUDE_DIRS`를 명시해 공식 소스 수정 없이 해결했다.
-4. 소스의 일부 중국어 주석이 UTF-8이 아니어서 최신 Apple Clang이 매우 많은 `invalid UTF-8 in comment` 경고를 낸다. 컴파일 결과에는 영향을 주지 않았다.
-5. `libzip`이 없어 self-play 학습 데이터 쓰기는 비활성화됐다. 분석/GTP에는 필요하지 않으므로 설치하지 않았다.
-6. 소스에 Metal backend가 없다. OpenCL 1.2는 Apple M5에서 실추론까지 성공했지만 FP16/tensor 경로의 `cl2Metal failed` 뒤 FP32로 정상 fallback했다. 제한된 macOS sandbox 안에서는 GPU 열거가 `CL_INVALID_VALUE`로 실패할 수 있어 네이티브 실행이 필요하다.
-7. 상속된 Analysis 문서의 Go용 예시와 현재 Gom2024 구현이 일부 다르다. Renju는 JSON rules 객체가 필요하고, 현재 응답에는 문서 예시의 score/ownership 계열 값이 없다.
-8. `policy=-1`은 일반적으로 점유/기본 legality mask지만 Renju 흑 금수를 보장하지 않는다. 그래서 별도 helper가 공식 `Board::isForbidden()`을 호출한다.
+- 시작 때 `query_version`으로 준비 상태 확인
+- stdout JSON Lines와 stderr 로그 분리
+- 요청별 공개 UUID와 별도 engine ID
+- 같은 연결의 새 요청은 현재 engine ID에 `terminate`를 보내고 대체
+- 취소 뒤 늦은 응답은 active ID와 process generation으로 무시
+- `isDuringSearch`와 `isFinal` 구분
+- 비정상 종료 감지 후 한 번만 재시작
+- 종료 시 active request 취소, `terminate_all`, stdin EOF 순으로 정리
+- 여러 idle WebSocket 허용, 실제 분석 lease는 전역 하나
 
-## Stage 1 체크포인트
-
-Stage 1 결과는 루트 저장소의 `7c26cbc` (`checkpoint: complete stage 1 engine validation`)에 보존했다. 모델, 빌드 결과, 로그, `.venv`, `vendor/`는 커밋하지 않았다. 공식 소스 작업 트리는 커밋 `df152116e3787c75c6a3de099d261ca092b7dfc1`에서 clean 상태를 유지한다.
-
-## Stage 1.5: Apple M5 OpenCL 실검증
-
-configure 성공만 확인한 것이 아니다. 네이티브 macOS 프로세스에서 Apple M5 GPU를 열거하고, 같은 `zhizi_renju28b_s1600.bin.gz`를 로드한 뒤 `B H8, W H9` 15×15 Renju 분석과 benchmark를 모두 실행했다.
-
-| Visits | CPU/Eigen | OpenCL | CPU 검색 시간 | OpenCL 검색 시간 | OpenCL 배속 |
-|---:|---:|---:|---:|---:|---:|
-| 100 | 21.68 visits/s | 95.68 visits/s | 4.9 s | 1.1 s | 4.41× |
-| 500 | 22.51 visits/s | 90.24 visits/s | 22.5 s | 5.6 s | 4.01× |
-
-OpenCL은 이 Mac의 기본값으로 채택했고 CPU/Eigen은 fallback으로 남겼다. 첫 실행은 약 40초의 autotune이 필요하며 이후에는 `artifacts/runtime/opencl/opencltuning/`의 결과를 재사용한다. `nnMaxBatchSize=8`이 필요하다. FP16/tensor 커널은 `cl2Metal failed`였지만 엔진이 FP32 storage/compute로 정상 fallback했고 분석과 종료는 안정적으로 끝났다. Metal 포팅은 시작하지 않았다.
-
-전체 configure/build/device/model/analysis/benchmark 원문은 `artifacts/stage1_5/opencl/`에 있다. 이 경로는 로컬 검증 산출물로 보존하지만 Git에는 넣지 않는다.
-
-## Stage 2 분석 서버
-
-FastAPI lifespan 동안 KataGomo analysis 자식 프로세스 하나만 유지한다. 서버 시작 때 `query_version`으로 준비 상태를 확인하고, stdout의 JSON Lines와 stderr 로그를 분리한다. stderr는 `artifacts/stage2/engine-stderr.log`에 남는다.
-
-Stage 2까지의 작동 상태는 루트 저장소 커밋 `4786773` (`checkpoint: complete stage 2 analysis server`)에 보존했다. 그 체크포인트와 현재 작업 모두 모델, 빌드 산출물, 로그, `.venv`, `vendor/`를 커밋하지 않으며 공식 KataGomo 소스는 지정 커밋에서 clean 상태를 유지한다.
-
-- 한 WebSocket 분석 세션만 허용하며 두 번째 연결은 `session_busy`로 거부한다.
-- 요청마다 공개 UUID와 별도 엔진 ID를 붙인다.
-- 새 요청은 현재 엔진 ID에 `terminate`를 보내고 즉시 대체한다.
-- 취소 뒤 늦게 도착한 응답은 active ID와 process generation으로 무시한다.
-- `isDuringSearch`로 중간 결과를, `isFinal`로 최종 결과를 구분한다.
-- 비정상 종료를 감지해 요청자에게 오류를 보내고 프로세스를 한 번만 재시작한다.
-- 서버 종료 시 active 요청 취소, `terminate_all`, stdin EOF 순으로 정상 종료를 시도한다.
-
-기본 엔진 요청은 15×15 Renju, `maxVisits=100`, `includePolicy=true`, `includePVVisits=true`, `reportDuringSearchEvery=0.5`다. 규칙은 문자열이 아니라 Gom2024가 실제 파싱하는 Renju 객체로 보낸다. 승률 원시 계약은 항상 `BLACK`이다.
-
-### API와 WebSocket
+기본 요청은 15×15 Renju, `maxVisits=100`, `includePolicy=true`, `includePVVisits=true`, `reportDuringSearchEvery=0.5`이며 승률 원시 계약은 항상 BLACK이다.
 
 | 경로 | 용도 |
 |---|---|
-| `GET /api/status` | 엔진 PID/state/restart/stale 수, helper 및 Python 상태 |
-| `POST /api/legality` | 공식 helper의 `forbiddenMoves`와 `legalMoves` |
-| `GET /api/training/options` | 종료 수, 분석 부족 기준, 승률·채점 계약 |
-| `POST /api/training/evaluate` | 한 사용자 수의 실제 policy/visit/winrate 평가 |
-| `POST /api/training/summary` | 충분히 분석된 수 중 가장 큰 실수 3개 정렬 |
+| `GET /api/status` | engine PID/state/restart/stale, active lease, 연결 수, helper, Python 상태 |
+| `POST /api/position` | 공식 합법·금수·종국 판정 |
+| `POST /api/legality` | `/api/position`의 이전 클라이언트용 호환 alias |
+| `GET /api/training/options` | 종료 수와 채점 계약 |
+| `POST /api/training/evaluate` | 사용자 한 수 평가 |
+| `POST /api/training/summary` | 충분히 분석된 수 중 큰 실수 최대 3개 |
 | `WS /ws/analysis` | 분석 시작·취소와 중간/최종 스트림 |
 
-분석 요청 예:
+분석 전에 position helper를 먼저 호출한다. 종국 수순은 engine이나 lease를 사용하지 않고 WebSocket `type=position`, `code=position_terminal`, `gameState`를 반환한다. 요청 schema, 흑백 교대나 중복 좌표 오류는 REST `422` 또는 WebSocket `validation_error`다. schema는 통과했지만 공식 helper가 의미상 잘못된 수순으로 판정하면 REST `422` 또는 WebSocket `invalid_position`, helper 자체를 실행할 수 없으면 REST `503` 또는 WebSocket `position_validation_unavailable`이다.
 
-```json
-{"action":"analyze","moves":[["B","H8"],["W","H9"]],"maxVisits":100,"reportDuringSearchEvery":0.5,"userColor":"B","clientRequestId":"example","analysisPurpose":"user_pre","positionRevision":2,"sessionEpoch":"example-session"}
+로컬 진단 예:
+
+```bash
+curl -s http://127.0.0.1:8000/api/status
+curl -s -X POST http://127.0.0.1:8000/api/position \
+  -H 'Content-Type: application/json' \
+  -d '{"moves":[["B","D8"],["W","A1"],["B","E8"],["W","C1"],["B","F8"],["W","E1"],["B","G8"],["W","G1"],["B","H8"]],"nextPlayer":"W"}'
 ```
 
-다음은 OpenCL 서버에서 `make websocket-smoke`로 받은 **실제 최종 응답을 핵심 필드만 발췌**한 것이다. 이 smoke는 빠른 OpenCL 검색도 0.5초 간격 중간 응답을 반드시 내도록 500 visits를 사용하며, 서버 기본값은 100이다. 전체 policy 226개와 모든 후보/PV visits가 들어 있는 원문은 `artifacts/stage3/websocket-response.jsonl`에 있다.
+두 번째 응답은 `isTerminal=true`, `winner="B"`, `outcome="black_win"`, `terminalReason="line_win"`, `terminalMove="H8"`이다. 여기에 종국 뒤 수를 추가하면 `422`로 거부된다.
+
+최신 CPU/Eigen WebSocket 500-visits smoke에서 받은 실제 변환 응답 일부는 다음과 같다. 전체 원문은 `artifacts/stage3/websocket-response.jsonl`에 생성된다.
 
 ```json
 {
@@ -305,146 +463,126 @@ Stage 2까지의 작동 상태는 루트 저장소 커밋 `4786773` (`checkpoint
   "winratePerspective": "BLACK",
   "currentPlayer": "B",
   "userColor": "B",
-  "candidateVisitTotal": 505,
+  "candidateVisitTotal": 506,
   "policyLength": 226,
   "topCandidate": {
-    "move": "G9",
-    "rawPrior": 0.158203125,
-    "visits": 70,
-    "visitShare": 0.13861386138613863,
-    "blackWinrate": 0.976996265,
-    "pv": ["G9", "J7", "F10", "J10", "F8", "F7", "G8", "J8", "J11", "J6", "J9", "E7", "H7", "D7", "C7"]
+    "move": "K8",
+    "order": 0,
+    "rawPrior": 0.0771484375,
+    "visits": 52,
+    "visitShare": 0.10276679841897234,
+    "blackWinrate": 0.974332779,
+    "pv": ["K8", "G8", "J10", "G9", "G7", "J9", "K9", "K7", "L8", "M7", "F9", "H11"]
   },
   "rootInfo": {
-    "visits": 506,
-    "blackWinrate": 0.968195415
+    "visits": 507,
+    "blackWinrate": 0.967879642
   }
 }
 ```
 
-`rawPrior`는 반드시 전체 `policy[coordinateIndex]`에서 읽고 `searchPrior`는 엔진 `moveInfos[].prior`로 별도 보존한다. `visitShare` 분모는 반환된 모든 후보의 visits 합이다. 합이 0이면 share를 0으로 두고 `analysisInsufficient=true`를 반환한다. `blackWinrate`만 원시값이고 `currentPlayerWinrate`와 `userWinrate`는 색을 명시한 변환값이다.
+### Position helper 검증
 
-## Renju 금수 helper
+helper 응답은 `source="KataGomo Board::isForbidden()"`와 `historySource="KataGomo BoardHistory::makeBoardMoveAssumeLegal()"`를 함께 기록한다. 흑 착수 직전 `isForbidden()`은 BoardHistory가 저장하지 않는 `black_forbidden` 사유를 보존하는 데도 사용한다. 백에게 흑 금수 규칙을 적용하지 않고, `policy=-1`을 합법성 근거로 사용하지 않는다.
 
-`native/forbidden_helper/`는 공식 translation unit을 소스 수정 없이 링크해 `Board::isForbidden()`을 직접 호출한다. 입력은 현재 수순과 다음 차례, 출력은 JSON `forbiddenMoves`, `legalMoves`, `source`다. 흑 차례에만 금수를 검사하며 백 차례에는 같은 모양도 금수로 만들지 않는다. analysis의 `policy=-1`은 사용하지 않는다.
+금수 fixture는 RIF/RenjuNet의 [공식 규칙](https://www.renju.net/rifrules/), [고급 교육 자료](https://www.renju.net/advanced/), [금수 도해](https://www.renju.net/upload/staticfiles/forbiddens.jpg)에 근거한다. 국소 패턴을 KataGomo 좌표로 정규화하고 교대 수순용 비간섭 filler를 더한 변환 내역은 fixture의 `provenance`에 기록했다.
 
-```bash
-make forbidden-helper
-printf '%s\n' '{"moves":[],"nextPlayer":"B"}' | build/forbidden-helper/forbidden_helper
-```
+검증 행렬은 다음을 포함한다.
 
-fixture는 RIF/RenjuNet의 [공식 규칙](https://www.renju.net/rifrules/), [고급 교육 자료](https://www.renju.net/advanced/), [금수 도해](https://www.renju.net/upload/staticfiles/forbiddens.jpg)에 근거한다. 첫 네 사례는 도표의 국소 패턴을 KataGomo 좌표로 정규화·분리하고 교대 수순용 비간섭 filler를 더한 것이다. 백 미적용과 빈 판 H8은 각각 RIF §9.2와 §4.2에서 도출한 불변조건이다. 이 변환 내역은 각 fixture의 `provenance`에 기록했다. 장목, 4×4, 3×3, 가짜 열린 3, 백 미적용, 빈 판 일반 합법 수가 모두 통과한다. 연습 UI에서도 해당 3×3 패턴의 `M5`가 표시되고 클릭이 차단되는 것을 실제 브라우저로 확인했다.
+- 흑·백 5목과 백 장목 승리
+- 흑 장목, 3×3, 4×4 금수패
+- 정확한 5목 우선
+- 가짜 열린 3
+- 백에게 흑 금수 미적용
+- 일반 합법 수
+- 224수 진행 중과 공식 경로로 검증한 225수 full-board 무승부
+- 종국 뒤 추가 수 거부
+- API 전체 position response contract
 
-## Stage 3–4 초반 반복 연습 UI와 채점
+### 100 vs 500 visits 후보 분포
 
-Stage 3–4 결과는 루트 저장소 커밋 `8bf988b` (`checkpoint: complete opening practice UI`)에 보존했다. 모델, 빌드 산출물, 로그, `.venv`, `vendor/`는 이 체크포인트에도 포함하지 않았다.
-
-`make dev` 후 [http://127.0.0.1:8000](http://127.0.0.1:8000)에 접속한다. 기본 설정은 15×15 Renju, 흑 사용자, 14수 종료, 매 수 즉시 평가, 100 visits다.
-
-- `AI 초반 연습`: 사용자가 흑 또는 백을 고르면 AI가 반대 색의 최종 `order=0` 수를 자동 착수한다.
-- `분석만`: AI 자동 착수 없이 흑·백을 자유롭게 놓고 현재 위치를 분석한다.
-- 종료 수는 6, 8, 10, 12, 14, 16수 중 고른다. 선택 수에 도달하면 추가 착수를 잠그고 결과를 정리한다.
-- 상위 후보 3/5/10개, 원 크기의 visit share/raw policy 전환, 후보별 흑 승률과 PV를 표시한다. 표의 후보를 hover/click하면 PV를 고정한다.
-- policy와 MCTS visits는 합치지 않는다. raw-policy 순위는 공식 helper의 현재 `legalMoves`만 대상으로 하고, visit share는 엔진이 반환한 모든 후보 visits 합을 분모로 한다.
-- 흑 금수는 helper 결과로 X 표시하고 클릭을 차단한다. 엔진 추천과 helper legality가 충돌하면 다른 후보로 바꾸지 않고 명확한 오류로 중단한다.
-- 즉시 평가와 종료 후 평가를 모두 지원한다. 완료 기록은 브라우저 `localStorage`의 `katagomo.openingPractice.v1`에 최근 20개까지 저장한다.
-- “같은 시작점”은 해당 연습을 시작했을 때의 정확한 수순, “새 초반 시작”은 빈 판을 뜻한다. 엔진이 결정적이면 같은 시작점의 AI 수가 반복될 수 있다.
-
-### 채점 계약
-
-절대 0~100 점수를 만들지 않는다. 사용자 수 직전의 최종 분석과 착수 직후의 다음 root 분석으로 다음을 기록한다.
-
-- 사용자의 raw policy와 공식 합법 수 중 policy 순위
-- 사용자의 실제 visits 순위, 엔진 추천 수의 visits 순위와 두 순위의 차이
-- 엔진 `order=0` 추천 수와 사용자 수
-- 사용자 관점의 착수 전/후 승률 변화와 추천 수 대비 승률 차이
-- pre/post root visits와 후보 visits 합
-
-엔진 `order`는 검색의 추천 순서이고 visits 순위와 반드시 같지는 않다. 실제 브라우저 검증에서도 `order=0`인 `J9`가 visits로는 2위인 사례가 나왔으므로 둘을 별도 필드로 유지한다. pre 분석이 최종이 아니거나, candidate/pre/post visits가 기준 50보다 적거나, 사용자 수가 MCTS 후보에 없거나, policy/legality 계약이 불완전하면 `분석 부족`으로 표시하고 확정적인 실수 순위에서 제외한다.
-
-각 WebSocket 요청과 REST 평가에는 session epoch, position revision, client request ID를 붙인다. Reset, Undo, 취소, 연결 종료 뒤 도착한 오래된 WS/REST/timer 결과는 현재 판에 적용하지 않는다. 동시에 하나의 분석 세션만 허용한다.
-
-## 실제 후보 분포: 100 vs 500 visits
-
-같은 `B H8, W H9` 포지션을 persistent CPU/Eigen 프로세스에서 연속 분석했다. 수치는 스레드 스케줄링으로 재실행 때 조금 달라질 수 있다.
+같은 `B H8, W H9` 포지션을 persistent CPU/Eigen 프로세스에서 연속 분석한 기록이다.
 
 | 항목 | 100 visits | 500 visits |
 |---|---:|---:|
-| 요청 포함 경과 | 5.094 s | 17.241 s |
-| 중간 응답 | 10 | 34 |
+| 요청 포함 경과 | 5.383 s | 17.924 s |
+| 중간 응답 | 10 | 35 |
 | root visits | 107 | 507 |
 | 후보 수 | 14 | 17 |
 | 후보 visits 합 | 106 | 506 |
-| MCTS 상위 5 | G9, J9, K8, F8, G10 | G9, J9, K8, F8, J10 |
+| Engine Order 상위 5 | G9, J9, K8, F8, G10 | G9, J9, K8, F8, J10 |
+| Visits 상위 5 | J9, G9, K8, F8, G10 | J9, G9, K8, F8, J10 |
 
-raw policy 상위 5는 두 분석 모두 `J9, G9, K8, F8, G10`이었다. 500 visits에서 MCTS 5위가 `J10`으로 달라졌다. 따라서 네트워크의 raw policy와 검색 visits는 같은 값처럼 합치지 않고 UI에 별도 표시해야 한다.
+Raw policy 상위 5는 둘 다 `J9, G9, K8, F8, G10`이었다. 500 visits에서는 MCTS 5위가 `J10`으로 달라졌다. 100 visits에서 `moveInfos`가 하나뿐이라는 과거 인상은 JSON 예시가 첫 후보만 발췌했기 때문이며 실제 최종 후보는 14개였다. 원본 비교는 `artifacts/stage2/candidate-distribution/comparison.json`에 생성된다.
 
-100 visits에서 `moveInfos`가 한 개뿐이라는 현상은 다시 실행한 어느 결과에서도 재현되지 않았다. 실제 최종 후보는 14개였고, 이전 문서의 JSON이 첫 후보 한 개만 발췌한 예시였던 것이 원인이다. 전체 비교는 `artifacts/stage2/candidate-distribution/comparison.json`에 있다.
+### 채점 계약
 
-## 테스트
+절대적인 0~100 점수를 만들지 않는다. 사용자 수 직전의 최종 분석과 착수 직후 결과에서 다음을 보존한다.
 
-```bash
-make test
-make integration-test
-make dev                  # 별도 터미널에서 유지
-make websocket-smoke      # 실제 OpenCL 서버 WebSocket 검증
-make compare-visits
-```
+- 사용자 Raw policy와 공식 합법 수 중 policy 순위
+- 사용자 수와 추천 수의 visit 순위 및 차이
+- `order=0` 추천 수와 사용자 수
+- 사용자 관점 착수 전/후 winrate 변화와 추천 수 대비 차이
+- pre/post Root visits와 후보 visits 합
 
-단위/프로세스 테스트는 좌표 왕복, 수순 스키마, JSON Lines, 분할된 JSON stream, visit share, BLACK→현재 차례/백 사용자 승률, cancel, supersede 및 stale 무시, 엔진 종료·1회 재시작, policy 226, 단일 WebSocket 세션, 금수 helper를 다룬다. Stage 3–4 테스트는 6~16수 경계와 기본 14수, policy/visit 순위, 추천 대비 signed gap, 분석 부족, 불법·PASS·중복 후보 거부, REST/WS request identity, NaN/Infinity JSON 오류 처리를 추가로 검증한다. 실제 통합 테스트는 mock이 아니라 Eigen 엔진과 공식 모델로 `B H8, W H9`를 분석한 뒤 실제 추천 수를 한 수 더 놓고 다시 분석한다. 중간/최종 응답과 prior/visits/winrate/PV/policy를 확인하고, 공식 helper의 legalMoves와 두 실제 분석으로 Stage 4 수별 평가까지 생성한다.
+Order는 Visits 순위와 다를 수 있다. 보존된 CPU 비교에서 `G9`는 `order=0`이지만 13 visits, `J9`는 `order=1`이지만 14 visits였으므로 두 값을 분리한다. pre 분석이 최종이 아니거나 후보 visits 합, pre Root visits, post Root visits 중 하나가 기준 50보다 적거나, 사용자 수가 MCTS 후보에 없거나, policy/legality 계약이 불완전하면 `분석 부족`으로 표시하고 확정적인 실수 순위에서 제외한다.
 
-2026-08-31의 최종 회귀 결과는 `make test` **69 passed, 1 deselected**, `make integration-test` **1 passed, 69 deselected**다. 실제 OpenCL `make websocket-smoke`는 500 visits에서 **중간 응답 11개, 최종 응답 1개, policy 226개, 후보 17개**와 Stage 3–4 request identity echo를 검증했다. 먼저 잘못된 수순에 JSON `validation_error`를 받고 같은 연결에서 분석이 계속되는 것도 확인한다. 중간 응답 개수와 후보 배분은 실행 스케줄링에 따라 달라진다.
+사용자 수가 공식 종국을 만들면 post-search를 꾸미지 않는다. `terminalState`의 승자에서 사용자 관점 1.0/0.0, 무승부 0.5를 만들고 `afterUserWinrateSource="official-terminal-result"`, `postRootVisits=null`, `terminalOutcome`, `terminalReason`을 기록한다. 진행 중 위치는 실제 `postRootInfo`와 `afterUserWinrateSource="engine-post-root"`를 사용한다.
 
-같은 날 실제 Apple M5 OpenCL 엔진과 공식 모델을 띄운 브라우저에서 기본 14수 흑 연습을 완주했다. AI 7수 자동 착수, 사용자 7수 평가, 수별 policy/visit/승률, 자동 종료, 결과표, 완료 후 추가 착수 차단, localStorage 1판 저장과 새로고침 후 복원을 확인했다. 모든 사용자 수는 분석 부족 없이 실제 서버 평가를 받았다. 백 연습에서는 빈 판에서 AI가 흑을 먼저 놓고 사용자 백 차례로 전환되는 것을 확인했다. 브라우저 console error는 없었다.
+각 WebSocket 요청과 REST 평가는 session epoch, position revision, client request ID를 사용한다. Reset, Undo, 취소나 연결 종료 뒤 도착한 stale WS/REST/timer 결과를 현재 판에 적용하지 않는다.
 
-## Stage 5 실행·인계 검증
+### 실제 실행 검증 기록
 
-체크포인트에서 다시 `make setup`, `make source`, `make verify-model`, `make engine`, `make forbidden-helper`, `make smoke`, `make test`, `make integration-test`를 순서대로 실행해 통과시켰다. setup은 현재 설치된 Homebrew 도구와 CPython 3.14.6 `.venv`를 재사용했고 새 Python을 설치하지 않았다. CPU smoke와 통합 테스트는 공식 모델의 실제 분석 결과만 사용했다.
+- 실행 재현성 체크포인트에서는 `make setup`, `make source`, `make verify-model`, `make engine`, `make forbidden-helper`, `make smoke`, `make test`, `make integration-test`를 순서대로 다시 실행했다. 기존 CPython 3.14.6을 재사용했고 새 Python을 설치하지 않았다.
+- 실제 Eigen 엔진·공식 모델 통합 테스트는 `B H8, W H9`를 분석하고 실제 추천 수를 한 수 더 둔 뒤 다시 분석한다. 중간/최종 응답과 prior, visits, winrate, PV, policy, helper legalMoves와 수별 평가를 확인한다.
+- 과거 OpenCL 500-visits WebSocket smoke는 중간 11개, 최종 1개, policy 226개, 후보 17개와 request identity echo를 확인했다.
+- 잘못된 WebSocket 수순에 `validation_error`를 받은 뒤 같은 연결에서 정상 분석을 계속할 수 있음을 확인했다.
+- 별도 CPU/Eigen, 외부 동일 모델, `KATAGOMO_PORT=8011` 실행에서는 중간 44개, 최종 1개, policy 226개, 후보 17개를 받고 `All cleaned up, quitting` 종료 로그까지 확인했다.
+- 이전 UI 체크포인트의 실제 브라우저에서 14수 흑 연습, AI 7수 자동 착수, 사용자 7수 평가, 결과표, 완료 후 착수 차단, 당시 localStorage 저장·복원과 백 연습의 AI 선착수를 확인했다. 모든 사용자 수가 실제 서버 평가를 받았고 당시 console error는 없었다.
+- 같은 이전 체크포인트에서 14수 판을 제한 없음으로 이어 16수까지 실제 분석·AI 응수 후 직접 종료했고, 기존 14수와 새 16수 기록이 각각 보존됨을 확인했다.
+- 같은 이전 체크포인트에서 금수 3×3 fixture의 M5 표시와 클릭 차단을 실제 브라우저로 확인했다. 현재 v2 복기 UI는 순수 상태·저장·DOM 계약 테스트와 실제 HTTP/WebSocket으로 검증했으며 Chrome 제어 서비스가 연결되지 않아 최종 시각 E2E는 별도로 남아 있다.
 
-`make dev`는 시작 전에 선택된 engine/model/config/helper를 명시하고 누락된 준비 명령을 알려준다. 실험용 `opencl-probe`는 자동 선택하지 않으며, 정식 `build/engine-opencl/katago`가 없으면 Eigen으로 내려간다. 서버는 UI와 API를 한 프로세스에서 제공하며 `Ctrl-C` 때 persistent analysis 자식 프로세스까지 정리한다.
+주요 생성 원문은 `artifacts/stage1/analysis-response.jsonl`, `artifacts/stage2/integration-response.jsonl`, `artifacts/stage2/candidate-distribution/`, `artifacts/stage3/websocket-response.jsonl`, `artifacts/stage3/integration-training-response.jsonl`에 저장한다. 모두 재생성 가능한 로컬 산출물이므로 Git에서는 제외한다.
 
-외부 경로로 지정한 동일 공식 모델과 CPU/Eigen, `KATAGOMO_PORT=8011` 조합으로도 서버를 실제 기동했다. 화면에서 engine ready, WebSocket 연결, 15×15 보드와 공식 helper 상태를 확인했다. 같은 포트의 500-visits WebSocket smoke는 중간 응답 44개, 최종 응답 1개, policy 226개, 후보 17개를 반환했고, 종료 로그의 `All cleaned up, quitting`까지 확인했다. 응답 횟수와 후보 visits 배분은 재실행 때 달라질 수 있다.
+중간 응답 수와 visits 분배는 실행 스케줄링에 따라 달라진다. 브라우저 E2E 전용 자동 러너는 아직 없으며 상태/저장 로직 단위 테스트, Python API/통합 테스트와 수동 브라우저 검증을 함께 유지한다.
 
-환경변수로 backend를 강제하지 않은 기본 `make dev`도 별도 포트에서 재실행했다. `/api/status`는 Apple M5 OpenCL 1.2 장치, 공식 `renju28b-b28c512nbt` 모델, engine `ready`, helper available, Python 3.14.6을 보고했고 종료도 정상 완료됐다.
+### 체크포인트
 
-브라우저 E2E 전용 테스트 러너는 아직 없다. 14수 자동 종료, 흑/백 연습, 결과표, localStorage 복원, 금수 표시·클릭 차단과 PV 상호작용은 실제 브라우저 검증으로 보완했고, Python 단위/통합 테스트와 실제 WebSocket smoke를 별도로 유지한다.
+| 커밋 | 내용 |
+|---|---|
+| `7c26cbc` | Stage 1 엔진·모델·실분석 검증 |
+| `4786773` | Stage 2 persistent 분석 서버 |
+| `8bf988b` | 반복 연습 UI와 채점 |
+| `d8e617d` | 실행 재현성 검증 |
 
-## 문제 해결
+각 체크포인트는 모델, 빌드 산출물, 로그, `.venv`, `vendor/`를 포함하지 않는다. 공식 KataGomo checkout은 지정 커밋에서 clean 상태로 유지했다.
 
-- 모델: `make verify-model`로 크기, SHA-256과 gzip stream을 다시 확인한다. 실제 모델 구조 로딩은 `make smoke`로 확인한다.
-- helper 누락: `make forbidden-helper`를 실행한다. helper 오류 중에는 UI 착수를 안전하게 차단한다.
-- OpenCL 첫 시작: autotune 때문에 약 40초 걸릴 수 있다. 제한된 sandbox에서 장치 열거가 실패하면 일반 Terminal에서 실행한다.
-- OpenCL 실패: 위의 `KATAGOMO_ENGINE`/`KATAGOMO_ANALYSIS_CONFIG` 예제로 Eigen을 강제한다.
-- 엔진 로그: `artifacts/stage2/engine-stderr.log`와 `artifacts/stage2/engine-invalid-stdout.log`를 확인한다.
-- 포트 충돌: `KATAGOMO_PORT=8001 make dev`처럼 바꾼다.
-- 사용자 지정 포트 smoke: 같은 `KATAGOMO_PORT=8001 make websocket-smoke`를 사용하거나 `KATAGOMO_WEBSOCKET_URL`을 직접 지정한다.
+### 확인된 호환성 문제
 
-오류 때 가짜 분석값이나 Python 금수 구현으로 대체하지 않는다.
+1. upstream `Compiling.md`의 CMake/C++ 요구사항은 오래됐고 실제 CMakeLists는 CMake 3.18.2와 C++17을 요구한다.
+2. Apple용 CMake가 `/usr/local/include`를 무조건 추가해 Apple Silicon의 실제 Homebrew prefix `/opt/homebrew`와 어긋나는 경고가 난다.
+3. Eigen 5는 발견되지만 오래된 CMake 코드가 include 변수를 받지 못해 `EIGEN3_INCLUDE_DIRS`를 명시해야 했다.
+4. 일부 중국어 주석이 UTF-8이 아니어서 최신 Apple Clang이 많은 `invalid UTF-8 in comment` 경고를 내지만 컴파일 결과에는 영향이 없었다.
+5. libzip 미설치로 self-play 학습 데이터 쓰기는 비활성화됐다. analysis/GTP에는 필요하지 않다.
+6. Metal backend는 없고 OpenCL은 deprecated이며 최신 재실행에서 `CL_INVALID_VALUE`가 발생했다.
+7. 상속된 Analysis 문서의 Go 예시와 Gom2024 구현이 일부 다르다. Renju는 JSON rules object가 필요하고 score/ownership 계열 값은 현재 응답에 없다.
+8. `policy=-1`은 점유/기본 mask일 수 있지만 Renju 흑 금수나 종국의 권위 있는 값이 아니다.
 
-## Stage 3–4에서 확정한 선택과 다음 결정
-
-- 기본 100 visits, 선택 500 visits로 두었다. Apple M5 OpenCL에서는 100이 실시간 연습에 충분히 반응성이 좋다.
-- `분석 부족` 하한은 candidate/pre/post 기준 50 visits다. 이는 신뢰도 보증 수치가 아니라 지나치게 작은 검색을 확정적으로 표현하지 않기 위한 UI 경계다.
-- AI는 중간 응답이 아니라 최종 응답의 `order=0`에서만 착수한다.
-- 승률 원시는 항상 BLACK 관점이며 화면에서만 현재 차례/사용자 관점을 명시적으로 변환한다.
-- Metal 포팅은 시작하지 않았고 현재 OpenCL 기본, Eigen fallback을 유지한다.
-
-다음 단계 전에 정할 것은 연습 시작점 생성 방식이다. 현재 “새 초반”은 빈 판이라 결정적 엔진과 반복하면 비슷한 진행이 나올 수 있다. policy 기반 다양화, 고정 오프닝 묶음, 사용자가 고른 첫 수 중 어느 방식을 추가할지 결정해야 한다. 또 100 visits 채점과 별도의 더 깊은 사후 재분석을 분리할지도 선택 사항이다.
-
-## 프로젝트 경로
+### 프로젝트 구조
 
 ```text
 config/                         CPU/OpenCL analysis 및 benchmark 설정
-native/forbidden_helper/        공식 Board::isForbidden() 호출 어댑터
-server/                         FastAPI, persistent engine, 변환/legality/채점
-web/                            Stage 3–4 초반 반복 연습·채점 UI
-tests/                          단위·프로세스·실제 엔진 통합 테스트
-scripts/                        빌드, 실행, smoke, 후보 비교
-artifacts/stage1_5/opencl/      OpenCL 실검증 원문, Git 제외
-artifacts/stage2/               실제 서버/후보 분포 결과, Git 제외
-artifacts/stage3/               실제 Stage 3 WebSocket 검증 결과, Git 제외
-vendor/KataGomo/                공식 clean clone, Git 제외
+native/forbidden_helper/        공식 BoardHistory + Board::isForbidden() adapter
+server/                         FastAPI, persistent engine, position, 변환, 채점
+web/                            데스크톱 Renju 연습·분석 UI
+tests/                          JS/Python 단위·프로세스·실엔진 통합 테스트
+scripts/                        소스·모델·빌드·실행·smoke·benchmark 스크립트
+benchmarks/                     CPU benchmark용 15×15 시작 SGF
+smoke/                          실제 Renju analysis JSONL 요청
+models/MANIFEST.json            공식 모델 URL과 무결성 metadata
+artifacts/                      실행 시 생성되는 검증 원문과 로그, Git 제외
+vendor/KataGomo/                공식 clean checkout, Git 제외
 build/engine-eigen/             CPU/Eigen 실행 파일, Git 제외
-build/engine-opencl/            OpenCL 실행 파일, Git 제외
-models/                         모델 본체는 Git 제외, manifest만 추적
+build/engine-opencl/            opt-in OpenCL 실행 파일, Git 제외
+models/*.bin.gz                 모델 본체, Git 제외
 ```

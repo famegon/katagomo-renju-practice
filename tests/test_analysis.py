@@ -70,6 +70,25 @@ def test_zero_visits_marks_analysis_insufficient():
     assert result["analysisState"] == "insufficient"
 
 
+def test_no_results_is_interruption_not_a_game_result():
+    result = transform_analysis_response(
+        {"id": "engine-1", "turnNumber": 9, "noResults": True},
+        request_id="public-1",
+        user_color="B",
+    )
+    assert result == {
+        "type": "analysis",
+        "requestId": "public-1",
+        "turnNumber": 9,
+        "isDuringSearch": False,
+        "isFinal": True,
+        "analysisState": "canceled",
+        "analysisInsufficient": True,
+        "noResults": True,
+    }
+    assert "winner" not in result
+
+
 @pytest.mark.parametrize("policy", [None, [], [0.0] * 225, [0.0] * 227])
 def test_malformed_policy_is_a_protocol_error(policy):
     raw = {

@@ -48,6 +48,8 @@ dev:
 
 test: forbidden-helper
 	@test -x .venv/bin/python || { echo "Missing .venv. Run: make setup" >&2; exit 1; }
+	@command -v node >/dev/null || { echo "Missing Node.js. Install Node 18 or newer for web tests." >&2; exit 1; }
+	node --test tests/web_*.test.mjs
 	.venv/bin/python -m pytest -m 'not integration'
 
 integration-test: forbidden-helper verify-model

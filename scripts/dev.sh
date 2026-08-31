@@ -10,13 +10,12 @@ if [[ ! -x .venv/bin/python ]]; then
 fi
 
 if [[ -z "${KATAGOMO_ENGINE:-}" ]]; then
-  if [[ -x build/engine-opencl/katago ]]; then
-    export KATAGOMO_ENGINE="${project_root}/build/engine-opencl/katago"
-    export KATAGOMO_ANALYSIS_CONFIG="${project_root}/config/analysis-opencl.cfg"
-  else
-    export KATAGOMO_ENGINE="${project_root}/build/engine-eigen/katago"
-    export KATAGOMO_ANALYSIS_CONFIG="${project_root}/config/analysis.cfg"
-  fi
+  # Eigen is the reproducible macOS default. Apple's deprecated OpenCL runtime
+  # can enumerate the GPU and still fail during model initialization on some
+  # hosts. Users who validated OpenCL locally can opt in with KATAGOMO_ENGINE
+  # and KATAGOMO_ANALYSIS_CONFIG.
+  export KATAGOMO_ENGINE="${project_root}/build/engine-eigen/katago"
+  export KATAGOMO_ANALYSIS_CONFIG="${project_root}/config/analysis.cfg"
 fi
 
 export KATAGOMO_MODEL="${KATAGOMO_MODEL:-${project_root}/models/zhizi_renju28b_s1600.bin.gz}"
@@ -45,7 +44,7 @@ if [[ ! -x "${KATAGOMO_FORBIDDEN_HELPER}" ]]; then
   exit 1
 fi
 
-echo "Starting KataGomo opening trainer"
+echo "Starting KataGomo Renju Practice"
 echo "  engine: ${KATAGOMO_ENGINE}"
 echo "  model: ${KATAGOMO_MODEL}"
 echo "  config: ${KATAGOMO_ANALYSIS_CONFIG}"

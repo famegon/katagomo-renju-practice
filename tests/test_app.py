@@ -1,6 +1,43 @@
+import time
+from dataclasses import replace
+
 from fastapi.testclient import TestClient
 
 from server.app import create_app
+from server.config import PROJECT_ROOT
+
+
+BLACK_LINE_WIN = [
+    ["B", "D8"],
+    ["W", "A1"],
+    ["B", "E8"],
+    ["W", "C1"],
+    ["B", "F8"],
+    ["W", "E1"],
+    ["B", "G8"],
+    ["W", "G1"],
+    ["B", "H8"],
+]
+
+
+def with_official_position_helper(settings):
+    return replace(
+        settings,
+        forbidden_helper_path=(
+            PROJECT_ROOT / "build/forbidden-helper/forbidden_helper"
+        ),
+    )
+
+
+def wait_for_analysis_session(
+    client: TestClient, *, occupied: bool, attempts: int = 50
+) -> dict:
+    for _ in range(attempts):
+        status = client.get("/api/status").json()
+        if status["analysisSessionOccupied"] is occupied:
+            return status
+        time.sleep(0.01)
+    raise AssertionError(f"analysisSessionOccupied did not become {occupied}")
 
 
 def test_fastapi_websocket_stream_on_python_314(fake_settings):
@@ -41,17 +78,384 @@ def test_fastapi_websocket_stream_on_python_314(fake_settings):
             assert final["candidates"][0]["rawPrior"] == 0.6
 
 
-def test_fastapi_rejects_second_analysis_session(fake_settings):
+def test_local_ui_assets_disable_browser_cache(fake_settings):
+    with TestClient(create_app(fake_settings)) as client:
+        index = client.get("/")
+        script = client.get("/static/app.js")
+
+        assert index.status_code == 200
+        assert script.status_code == 200
+        assert index.headers["cache-control"] == "no-store"
+        assert script.headers["cache-control"] == "no-store"
+
+
+def test_position_endpoint_uses_official_board_history(fake_settings):
+    settings = with_official_position_helper(fake_settings)
+    with TestClient(create_app(settings)) as client:
+        response = client.post(
+            "/api/position",
+            json={"moves": BLACK_LINE_WIN, "nextPlayer": "W"},
+        )
+        assert response.status_code == 200
+        state = response.json()
+        assert state["rules"] == "renju"
+        assert state["isTerminal"] is True
+        assert state["winner"] == "B"
+        assert state["outcome"] == "black_win"
+        assert state["terminalReason"] == "line_win"
+        assert state["terminalMove"] == "H8"
+        assert state["legalMoves"] == []
+        assert state["forbiddenMoves"] == []
+        assert state["historySource"].startswith("KataGomo BoardHistory")
+
+
+def test_terminal_position_is_not_sent_to_analysis_engine(fake_settings):
+    settings = with_official_position_helper(fake_settings)
+    with TestClient(create_app(settings)) as client:
+        with client.websocket_connect("/ws/analysis") as websocket:
+            assert websocket.receive_json()["status"] == "connected"
+            websocket.send_json(
+                {
+                    "action": "analyze",
+                    "moves": BLACK_LINE_WIN,
+                    "clientRequestId": "terminal-position",
+                    "positionRevision": 9,
+                }
+            )
+            terminal = websocket.receive_json()
+            assert terminal["type"] == "position"
+            assert terminal["code"] == "position_terminal"
+            assert terminal["clientRequestId"] == "terminal-position"
+            assert terminal["gameState"]["winner"] == "B"
+            assert terminal["gameState"]["terminalReason"] == "line_win"
+            assert client.get("/api/status").json()["analysisSessionOccupied"] is False
+
+            websocket.send_json(
+                {
+                    "action": "analyze",
+                    "moves": [],
+                    "maxVisits": 42,
+                    "clientRequestId": "after-terminal-rejection",
+                }
+            )
+            assert websocket.receive_json()["status"] == "analyzing"
+            while True:
+                message = websocket.receive_json()
+                if message.get("type") == "analysis" and message.get("isFinal"):
+                    break
+            assert message["clientRequestId"] == "after-terminal-rejection"
+
+
+def test_terminal_position_supersedes_active_search_and_releases_lease(
+    fake_settings,
+):
+    settings = with_official_position_helper(fake_settings)
+    with TestClient(create_app(settings)) as client:
+        with client.websocket_connect("/ws/analysis") as websocket:
+            assert websocket.receive_json()["status"] == "connected"
+            websocket.send_json(
+                {
+                    "action": "analyze",
+                    "moves": [],
+                    "maxVisits": 100,
+                    "clientRequestId": "obsolete-search",
+                }
+            )
+            assert websocket.receive_json()["status"] == "analyzing"
+            assert websocket.receive_json()["isDuringSearch"] is True
+            assert wait_for_analysis_session(client, occupied=True)
+
+            websocket.send_json(
+                {
+                    "action": "analyze",
+                    "moves": BLACK_LINE_WIN,
+                    "clientRequestId": "terminal-replacement",
+                    "positionRevision": len(BLACK_LINE_WIN),
+                }
+            )
+            messages = [websocket.receive_json(), websocket.receive_json()]
+            terminal = next(
+                message for message in messages if message.get("type") == "position"
+            )
+            canceled = next(
+                message
+                for message in messages
+                if message.get("type") == "status"
+                and message.get("status") == "canceled"
+            )
+            assert terminal["clientRequestId"] == "terminal-replacement"
+            assert terminal["gameState"]["outcome"] == "black_win"
+            assert canceled["clientRequestId"] == "obsolete-search"
+            assert wait_for_analysis_session(client, occupied=False)
+
+
+def test_position_endpoint_rejects_moves_after_terminal(fake_settings):
+    settings = with_official_position_helper(fake_settings)
+    with TestClient(create_app(settings)) as client:
+        response = client.post(
+            "/api/position",
+            json={
+                "moves": [*BLACK_LINE_WIN, ["W", "P15"]],
+                "nextPlayer": "B",
+            },
+        )
+        assert response.status_code == 422
+        assert "after the game ended" in response.json()["detail"]
+
+
+def test_position_endpoint_reports_unstartable_helper_as_service_unavailable(
+    fake_settings,
+):
+    fake_settings.forbidden_helper_path.chmod(0o644)
+    with TestClient(create_app(fake_settings)) as client:
+        response = client.post("/api/position", json={"moves": []})
+        assert response.status_code == 503
+        assert "Could not start the Renju position helper" in response.json()["detail"]
+
+
+def test_multiple_idle_websockets_share_one_active_analysis_session(fake_settings):
     with TestClient(create_app(fake_settings)) as client:
         with client.websocket_connect("/ws/analysis") as first:
             assert first.receive_json()["status"] == "connected"
             with client.websocket_connect("/ws/analysis") as second:
-                message = second.receive_json()
-                assert message["type"] == "error"
-                assert message["code"] == "session_busy"
+                assert second.receive_json()["status"] == "connected"
 
-            status = client.get("/api/status").json()
-            assert status["analysisSessionOccupied"] is True
+                idle_status = client.get("/api/status").json()
+                assert idle_status["analysisConnectionCount"] == 2
+                assert idle_status["analysisSessionOccupied"] is False
+
+                first.send_json(
+                    {
+                        "action": "analyze",
+                        "moves": [],
+                        "maxVisits": 100,
+                        "clientRequestId": "first-long",
+                    }
+                )
+                assert first.receive_json()["status"] == "analyzing"
+                during = first.receive_json()
+                assert during["type"] == "analysis"
+                assert during["isDuringSearch"] is True
+
+                active_status = client.get("/api/status").json()
+                assert active_status["analysisConnectionCount"] == 2
+                assert active_status["analysisSessionOccupied"] is True
+
+                second.send_json(
+                    {
+                        "action": "analyze",
+                        "moves": [],
+                        "maxVisits": 42,
+                        "clientRequestId": "second-busy",
+                    }
+                )
+                busy = second.receive_json()
+                assert busy["type"] == "error"
+                assert busy["code"] == "session_busy"
+                assert busy["clientRequestId"] == "second-busy"
+
+                first.send_json({"action": "cancel"})
+                canceled = first.receive_json()
+                assert canceled["status"] == "canceled"
+                assert canceled["clientRequestId"] == "first-long"
+
+                second.send_json(
+                    {
+                        "action": "analyze",
+                        "moves": [],
+                        "maxVisits": 42,
+                        "clientRequestId": "second-retry",
+                    }
+                )
+                assert second.receive_json()["status"] == "analyzing"
+                while True:
+                    message = second.receive_json()
+                    if message.get("type") == "analysis" and message.get("isFinal"):
+                        break
+                assert message["clientRequestId"] == "second-retry"
+                released = wait_for_analysis_session(client, occupied=False)
+                assert released["analysisConnectionCount"] == 2
+
+                first.send_json(
+                    {
+                        "action": "analyze",
+                        "moves": [],
+                        "maxVisits": 42,
+                        "clientRequestId": "first-after-final",
+                    }
+                )
+                assert first.receive_json()["status"] == "analyzing"
+                while True:
+                    message = first.receive_json()
+                    if message.get("type") == "analysis" and message.get("isFinal"):
+                        break
+                assert message["clientRequestId"] == "first-after-final"
+
+
+def test_superseded_response_cannot_release_new_request_lease(fake_settings):
+    with TestClient(create_app(fake_settings)) as client:
+        with client.websocket_connect("/ws/analysis") as owner:
+            assert owner.receive_json()["status"] == "connected"
+            with client.websocket_connect("/ws/analysis") as observer:
+                assert observer.receive_json()["status"] == "connected"
+
+                owner.send_json(
+                    {
+                        "action": "analyze",
+                        "moves": [],
+                        "maxVisits": 100,
+                        "clientRequestId": "old-request",
+                    }
+                )
+                assert owner.receive_json()["status"] == "analyzing"
+                assert owner.receive_json()["isDuringSearch"] is True
+
+                owner.send_json(
+                    {
+                        "action": "analyze",
+                        "moves": [],
+                        "maxVisits": 100,
+                        "clientRequestId": "new-request",
+                    }
+                )
+                canceled = owner.receive_json()
+                assert canceled["status"] == "canceled"
+                assert canceled["clientRequestId"] == "old-request"
+                assert owner.receive_json()["clientRequestId"] == "new-request"
+                replacement_during = owner.receive_json()
+                assert replacement_during["clientRequestId"] == "new-request"
+                assert replacement_during["isDuringSearch"] is True
+
+                observer.send_json(
+                    {
+                        "action": "analyze",
+                        "moves": [],
+                        "maxVisits": 42,
+                        "clientRequestId": "must-stay-busy",
+                    }
+                )
+                busy = observer.receive_json()
+                assert busy["code"] == "session_busy"
+                assert busy["clientRequestId"] == "must-stay-busy"
+
+                owner.send_json({"action": "cancel"})
+
+
+def test_engine_warning_keeps_request_lease_until_terminal_event(fake_settings):
+    with TestClient(create_app(fake_settings)) as client:
+        with client.websocket_connect("/ws/analysis") as owner:
+            assert owner.receive_json()["status"] == "connected"
+            with client.websocket_connect("/ws/analysis") as observer:
+                assert observer.receive_json()["status"] == "connected"
+
+                owner.send_json(
+                    {
+                        "action": "analyze",
+                        "moves": [],
+                        "maxVisits": 6,
+                        "clientRequestId": "warning-owner",
+                    }
+                )
+                assert owner.receive_json()["status"] == "analyzing"
+                warning = owner.receive_json()
+                assert warning["type"] == "warning"
+                assert warning["clientRequestId"] == "warning-owner"
+
+                observer.send_json(
+                    {
+                        "action": "analyze",
+                        "moves": [],
+                        "maxVisits": 42,
+                        "clientRequestId": "blocked-by-warning-request",
+                    }
+                )
+                busy = observer.receive_json()
+                assert busy["code"] == "session_busy"
+                assert busy["clientRequestId"] == "blocked-by-warning-request"
+
+                owner.send_json({"action": "cancel"})
+                canceled = owner.receive_json()
+                assert canceled["status"] == "canceled"
+                assert canceled["clientRequestId"] == "warning-owner"
+
+
+def test_terminal_engine_error_releases_lease_for_another_socket(fake_settings):
+    with TestClient(create_app(fake_settings)) as client:
+        with client.websocket_connect("/ws/analysis") as owner:
+            assert owner.receive_json()["status"] == "connected"
+            with client.websocket_connect("/ws/analysis") as observer:
+                assert observer.receive_json()["status"] == "connected"
+                owner.send_json(
+                    {
+                        "action": "analyze",
+                        "moves": [],
+                        "maxVisits": 7,
+                        "clientRequestId": "bad-policy-owner",
+                    }
+                )
+                assert owner.receive_json()["status"] == "analyzing"
+                error = owner.receive_json()
+                assert error["code"] == "engine_protocol_error"
+                assert error["clientRequestId"] == "bad-policy-owner"
+                wait_for_analysis_session(client, occupied=False)
+
+                observer.send_json(
+                    {
+                        "action": "analyze",
+                        "moves": [],
+                        "maxVisits": 42,
+                        "clientRequestId": "observer-after-error",
+                    }
+                )
+                assert observer.receive_json()["status"] == "analyzing"
+                while True:
+                    response = observer.receive_json()
+                    if response.get("type") == "analysis" and response.get("isFinal"):
+                        break
+                assert response["clientRequestId"] == "observer-after-error"
+
+
+def test_validation_error_does_not_release_active_request_lease(fake_settings):
+    with TestClient(create_app(fake_settings)) as client:
+        with client.websocket_connect("/ws/analysis") as owner:
+            assert owner.receive_json()["status"] == "connected"
+            with client.websocket_connect("/ws/analysis") as observer:
+                assert observer.receive_json()["status"] == "connected"
+                owner.send_json(
+                    {
+                        "action": "analyze",
+                        "moves": [],
+                        "maxVisits": 100,
+                        "clientRequestId": "valid-active",
+                    }
+                )
+                assert owner.receive_json()["status"] == "analyzing"
+                assert owner.receive_json()["isDuringSearch"] is True
+
+                owner.send_json(
+                    {
+                        "action": "analyze",
+                        "moves": [["W", "H8"]],
+                        "clientRequestId": "invalid-while-active",
+                    }
+                )
+                validation = owner.receive_json()
+                assert validation["code"] == "validation_error"
+                assert validation["clientRequestId"] == "invalid-while-active"
+                assert wait_for_analysis_session(client, occupied=True)
+
+                observer.send_json(
+                    {
+                        "action": "analyze",
+                        "moves": [],
+                        "maxVisits": 42,
+                        "clientRequestId": "observer-still-blocked",
+                    }
+                )
+                busy = observer.receive_json()
+                assert busy["code"] == "session_busy"
+                owner.send_json({"action": "cancel"})
+                assert owner.receive_json()["status"] == "canceled"
 
 
 def test_websocket_validation_error_is_json_and_connection_stays_usable(fake_settings):

@@ -176,6 +176,7 @@ class KataGomoEngine:
         analysis_purpose: str = "manual",
         position_revision: int = 0,
         session_epoch: str | None = None,
+        request_id: str | None = None,
     ) -> str:
         await self.cancel_active(reason="superseded")
         process = self.process
@@ -189,7 +190,7 @@ class KataGomoEngine:
                 self.last_error or f"KataGomo is not ready (state={self.state})"
             )
 
-        request_id = uuid.uuid4().hex
+        request_id = request_id or uuid.uuid4().hex
         engine_request_id = f"analysis-{request_id}"
         context = ActiveRequest(
             engine_request_id=engine_request_id,
@@ -212,6 +213,9 @@ class KataGomoEngine:
                 "basicrule": "RENJU",
                 "vcnrule": "NOVC",
                 "firstpasswin": False,
+                # Keep the released model's validated analysis contract. The
+                # position helper alone uses 225 to classify a filled board as
+                # a draw before analysis is submitted.
                 "maxmoves": 0,
             },
             "boardXSize": 15,

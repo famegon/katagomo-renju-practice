@@ -82,6 +82,10 @@ for line in sys.stdin:
     else:
         if request.get("maxVisits") == 13:
             sys.exit(23)
+        if request.get("maxVisits") == 6:
+            pending[request["id"]] = request
+            emit({"id": request["id"], "warning": "fake nonterminal warning"})
+            continue
         if request.get("maxVisits") == 7:
             malformed = analysis_response(request, during=False)
             malformed["policy"] = []

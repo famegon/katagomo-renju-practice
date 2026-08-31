@@ -58,6 +58,38 @@ async def main() -> None:
             if response.get("type") == "analysis" and response.get("isFinal"):
                 break
 
+        terminal_moves = [
+            ["B", "H8"],
+            ["W", "A1"],
+            ["B", "J8"],
+            ["W", "A2"],
+            ["B", "K8"],
+            ["W", "A3"],
+            ["B", "L8"],
+            ["W", "A4"],
+            ["B", "M8"],
+        ]
+        await websocket.send(
+            json.dumps(
+                {
+                    "action": "analyze",
+                    "moves": terminal_moves,
+                    "rules": "renju",
+                    "boardXSize": 15,
+                    "boardYSize": 15,
+                    "clientRequestId": "websocket-terminal-smoke",
+                    "analysisPurpose": "manual",
+                    "positionRevision": len(terminal_moves),
+                    "sessionEpoch": "websocket-smoke-session",
+                },
+                separators=(",", ":"),
+            )
+        )
+        terminal_response = json.loads(
+            await asyncio.wait_for(websocket.recv(), timeout=10)
+        )
+        responses.append(terminal_response)
+
     output_path.write_text(
         "".join(json.dumps(response, separators=(",", ":")) + "\n" for response in responses),
         encoding="utf-8",
@@ -110,6 +142,23 @@ async def main() -> None:
         raise AssertionError(f"Candidate is missing required fields: {missing}")
     if "rootInfo" not in final:
         raise AssertionError("Final response is missing rootInfo")
+    expected_terminal = {
+        "type": "position",
+        "status": "terminal",
+        "code": "position_terminal",
+        "clientRequestId": "websocket-terminal-smoke",
+    }
+    terminal_mismatch = {
+        field: terminal_response.get(field)
+        for field, expected in expected_terminal.items()
+        if terminal_response.get(field) != expected
+    }
+    game_state = terminal_response.get("gameState", {})
+    if terminal_mismatch or game_state.get("outcome") != "black_win":
+        raise AssertionError(
+            "Expected the official black-win terminal gate, got "
+            f"mismatch={terminal_mismatch}, gameState={game_state}"
+        )
     print(
         json.dumps(
             {
@@ -120,6 +169,11 @@ async def main() -> None:
                 "policyLength": final["policyLength"],
                 "candidateCount": len(final["candidates"]),
                 "validationError": validation_error["code"],
+                "terminalGate": {
+                    "code": terminal_response["code"],
+                    "outcome": game_state["outcome"],
+                    "terminalReason": game_state["terminalReason"],
+                },
                 "identity": expected_identity,
                 "topCandidate": top_candidate,
             },
