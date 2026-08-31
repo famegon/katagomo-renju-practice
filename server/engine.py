@@ -44,10 +44,12 @@ class KataGomoEngine:
         self.restart_count = 0
         self.stale_response_count = 0
         self._generation = 0
+        self._ready_generation: int | None = None
         self._stopping = False
         self._command_lock = asyncio.Lock()
         self._spawn_lock = asyncio.Lock()
         self._tasks: set[asyncio.Task[Any]] = set()
+        self._task_generations: dict[asyncio.Task[Any], int] = {}
         self._stderr_tail: deque[str] = deque(maxlen=50)
         self._control_waiters: dict[str, asyncio.Future[dict[str, Any]]] = {}
 
@@ -99,29 +101,214 @@ class KataGomoEngine:
             generation = self._generation
             self.start_count += 1
             self.last_error = None
-            self._track_task(self._read_stdout(process, generation))
-            self._track_task(self._read_stderr(process, generation))
-            self._track_task(self._watch_process(process, generation))
+            self._track_task(
+                self._read_stdout(process, generation),
+                task_name="stdout reader",
+                process=process,
+                generation=generation,
+            )
+            self._track_task(
+                self._read_stderr(process, generation),
+                task_name="stderr reader",
+                process=process,
+                generation=generation,
+            )
+            self._track_task(
+                self._watch_process(process, generation),
+                task_name="process watcher",
+                process=process,
+                generation=generation,
+            )
             control_id = f"startup-{uuid.uuid4().hex}"
             waiter = asyncio.get_running_loop().create_future()
             self._control_waiters[control_id] = waiter
-            await self._send_json({"id": control_id, "action": "query_version"})
             try:
+                await self._send_json({"id": control_id, "action": "query_version"})
                 await asyncio.wait_for(waiter, timeout=120.0)
             except TimeoutError as exc:
-                self._control_waiters.pop(control_id, None)
+                message = "KataGomo readiness query timed out"
+                await self._cleanup_failed_spawn(process, generation, control_id)
                 self.state = "error"
-                self.last_error = "KataGomo readiness query timed out"
-                if process.returncode is None:
-                    process.terminate()
-                raise EngineUnavailableError(self.last_error) from exc
+                self.last_error = message
+                raise EngineUnavailableError(message) from exc
+            except Exception as exc:
+                message = (
+                    str(exc)
+                    if isinstance(exc, EngineUnavailableError)
+                    else self.last_error or f"KataGomo readiness query failed: {exc}"
+                )
+                await self._cleanup_failed_spawn(process, generation, control_id)
+                self.state = "error"
+                self.last_error = message
+                raise EngineUnavailableError(message) from exc
+            finally:
+                self._control_waiters.pop(control_id, None)
+            self._ready_generation = generation
             self.state = "ready"
 
-    def _track_task(self, coroutine: Any) -> asyncio.Task[Any]:
-        task = asyncio.create_task(coroutine)
+    async def _cleanup_failed_spawn(
+        self,
+        process: asyncio.subprocess.Process,
+        generation: int,
+        control_id: str,
+    ) -> None:
+        """Reap every resource created by a process that never became ready."""
+        waiter = self._control_waiters.pop(control_id, None)
+        if waiter is not None and not waiter.done():
+            waiter.cancel()
+        if self._ready_generation == generation:
+            self._ready_generation = None
+
+        if process.returncode is None:
+            try:
+                process.terminate()
+            except ProcessLookupError:
+                pass
+            try:
+                await asyncio.wait_for(process.wait(), timeout=3.0)
+            except TimeoutError:
+                try:
+                    process.kill()
+                except ProcessLookupError:
+                    pass
+                await process.wait()
+
+        current = asyncio.current_task()
+        tasks = [
+            task
+            for task in self._tasks
+            if task is not current and self._task_generations.get(task) == generation
+        ]
+        for task in tasks:
+            task.cancel()
+        if tasks:
+            await asyncio.gather(*tasks, return_exceptions=True)
+        if self.process is process:
+            self.process = None
+
+    def _track_task(
+        self,
+        coroutine: Any,
+        *,
+        task_name: str,
+        process: asyncio.subprocess.Process,
+        generation: int,
+    ) -> asyncio.Task[Any]:
+        task = asyncio.create_task(
+            self._supervise_background_task(
+                coroutine,
+                task_name=task_name,
+                process=process,
+                generation=generation,
+            ),
+            name=f"katagomo {task_name} ({generation})",
+        )
         self._tasks.add(task)
-        task.add_done_callback(self._tasks.discard)
+        self._task_generations[task] = generation
+        task.add_done_callback(self._background_task_done)
         return task
+
+    def _background_task_done(self, task: asyncio.Task[Any]) -> None:
+        self._tasks.discard(task)
+        self._task_generations.pop(task, None)
+        if task.cancelled():
+            return
+        # Always retrieve the exception. The supervisor normally consumes task
+        # failures after reporting them to the active request, but this final
+        # boundary prevents a bug in the recovery path from becoming an
+        # unobserved "Task exception was never retrieved" warning.
+        exception = task.exception()
+        if exception is not None and not self._stopping:
+            self.last_error = (
+                f"KataGomo background task recovery failed: "
+                f"{type(exception).__name__}: {exception}"
+            )
+            self.state = "error"
+
+    async def _supervise_background_task(
+        self,
+        coroutine: Any,
+        *,
+        task_name: str,
+        process: asyncio.subprocess.Process,
+        generation: int,
+    ) -> None:
+        try:
+            await coroutine
+        except asyncio.CancelledError:
+            raise
+        except Exception as exc:
+            await self._handle_background_task_failure(
+                task_name=task_name,
+                process=process,
+                generation=generation,
+                exception=exc,
+            )
+
+    async def _handle_background_task_failure(
+        self,
+        *,
+        task_name: str,
+        process: asyncio.subprocess.Process,
+        generation: int,
+        exception: Exception,
+    ) -> None:
+        if self._stopping or generation != self._generation:
+            return
+
+        message = (
+            f"KataGomo {task_name} failed: "
+            f"{type(exception).__name__}: {exception}"
+        )
+        self.last_error = message
+        self.state = "error"
+
+        for control_id, waiter in list(self._control_waiters.items()):
+            if not waiter.done():
+                waiter.set_exception(
+                    EngineUnavailableError(
+                        f"{message} before control response: {control_id}"
+                    )
+                )
+        self._control_waiters.clear()
+
+        context = self.active
+        self.active = None
+        restart_possible = (
+            task_name != "process watcher"
+            and process is self.process
+            and process.returncode is None
+            and generation == self._ready_generation
+            and self.restart_count < self.restart_limit
+        )
+        if context is not None:
+            await context.output_queue.put(
+                {
+                    "type": "error",
+                    "code": "engine_background_error",
+                    "message": message,
+                    "requestId": context.request_id,
+                    "clientRequestId": context.client_request_id,
+                    "analysisPurpose": context.analysis_purpose,
+                    "positionRevision": context.position_revision,
+                    "sessionEpoch": context.session_epoch,
+                    "requestedMaxVisits": context.requested_max_visits,
+                    "positionMoveCount": context.position_move_count,
+                    "backgroundTask": task_name,
+                    "restartAttempted": restart_possible,
+                }
+            )
+
+        # A dead reader makes the persistent process unusable even if the
+        # executable itself is still running. Terminating it delegates the
+        # existing one-restart policy to the still-live process watcher. If the
+        # watcher itself failed, make the process stop but do not claim that an
+        # unsupervised restart will happen.
+        if process is self.process and process.returncode is None:
+            try:
+                process.terminate()
+            except ProcessLookupError:
+                pass
 
     async def stop(self) -> None:
         self._stopping = True
@@ -162,6 +349,7 @@ class KataGomoEngine:
         if remaining:
             await asyncio.gather(*remaining, return_exceptions=True)
         self.process = None
+        self._ready_generation = None
         self.state = "stopped"
 
     async def submit(
@@ -326,7 +514,22 @@ class KataGomoEngine:
         while True:
             line = await process.stdout.readline()
             if not line:
-                return
+                if self._stopping or generation != self._generation:
+                    return
+                # Give the process watcher one scheduling turn to classify a
+                # normal child exit. EOF while the child remains alive means
+                # analysis responses can never arrive and must be recovered.
+                await asyncio.sleep(0)
+                if process.returncode is not None:
+                    return
+                raise RuntimeError(
+                    "KataGomo stdout closed unexpectedly while the process is alive"
+                )
+            if not line.endswith(b"\n"):
+                invalid_path.parent.mkdir(parents=True, exist_ok=True)
+                with invalid_path.open("ab") as output:
+                    output.write(line)
+                raise RuntimeError("Truncated JSONL record on KataGomo stdout")
             try:
                 raw = json.loads(line)
                 if not isinstance(raw, dict):
@@ -335,8 +538,7 @@ class KataGomoEngine:
                 invalid_path.parent.mkdir(parents=True, exist_ok=True)
                 with invalid_path.open("ab") as output:
                     output.write(line)
-                self.last_error = f"Invalid JSON on KataGomo stdout: {exc}"
-                continue
+                raise RuntimeError(f"Invalid JSON on KataGomo stdout: {exc}") from exc
 
             if generation != self._generation:
                 self.stale_response_count += 1
@@ -462,6 +664,12 @@ class KataGomoEngine:
         return_code = await process.wait()
         if self._stopping or generation != self._generation:
             return
+        restart_possible = (
+            generation == self._ready_generation
+            and self.restart_count < self.restart_limit
+        )
+        if generation == self._ready_generation:
+            self._ready_generation = None
         self.process = None
         for control_id, waiter in list(self._control_waiters.items()):
             if not waiter.done():
@@ -487,10 +695,10 @@ class KataGomoEngine:
                     "sessionEpoch": context.session_epoch,
                     "requestedMaxVisits": context.requested_max_visits,
                     "positionMoveCount": context.position_move_count,
-                    "restartAttempted": self.restart_count < self.restart_limit,
+                    "restartAttempted": restart_possible,
                 }
             )
-        if self.restart_count < self.restart_limit:
+        if restart_possible:
             self.restart_count += 1
             self.state = "restarting"
             try:

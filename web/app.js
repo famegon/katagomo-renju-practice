@@ -16,7 +16,6 @@ import {
   createPracticeAttempt,
   finishPracticeCompletion,
   gamePositionKey,
-  isAnalysisResponseCurrent,
   replaceGameMoves,
   transitionAnalysisJob,
   trimPracticeTurnRecords,
@@ -44,17 +43,37 @@ import {
   reviewTurn,
 } from "./history-review.mjs";
 import { deriveViewState } from "./view-state.mjs";
+import { decideWebSocketMessage } from "./ws-message-state.mjs";
+import {
+  candidateHitAtPoint,
+  resetNeedsConfirmation,
+  resolveBoardPointerIntent,
+} from "./board-interaction.mjs";
+import {
+  clientPointToCanvas,
+  configureHiDpiSquareCanvas,
+} from "./canvas-geometry.mjs";
 
 const BOARD_SIZE = 15;
 const POLICY_LENGTH = 226;
 const COLUMNS = "ABCDEFGHJKLMNOP";
 const MIN_GRADE_VISITS = 50;
+const BOARD_CANVAS_SIZE = 760;
+const REVIEW_CANVAS_SIZE = 540;
 const canvas = document.querySelector("#board");
-const context = canvas.getContext("2d");
 const reviewCanvas = document.querySelector("#review-board");
-const reviewContext = reviewCanvas.getContext("2d");
+const { context } = configureHiDpiSquareCanvas(
+  canvas,
+  BOARD_CANVAS_SIZE,
+  window.devicePixelRatio,
+);
+const { context: reviewContext } = configureHiDpiSquareCanvas(
+  reviewCanvas,
+  REVIEW_CANVAS_SIZE,
+  window.devicePixelRatio,
+);
 const margin = 48;
-const spacing = (canvas.width - margin * 2) / (BOARD_SIZE - 1);
+const spacing = (BOARD_CANVAS_SIZE - margin * 2) / (BOARD_SIZE - 1);
 
 const byId = (id) => document.querySelector(`#${id}`);
 const elements = {
@@ -70,6 +89,7 @@ const elements = {
   sizeMetric: byId("size-metric"), topCount: byId("top-count"),
   practiceStart: byId("practice-start"), practiceFinish: byId("practice-finish"),
   analyze: byId("analyze"), cancel: byId("cancel"),
+  retryLegality: byId("retry-legality"), retryTraining: byId("retry-training"),
   undo: byId("undo"), reset: byId("reset"), clearPv: byId("clear-pv"),
   candidates: byId("candidates"), rawPolicy: byId("raw-policy"),
   candidateFocus: byId("candidate-focus"), candidateFocusCard: byId("candidate-focus-card"),
@@ -83,6 +103,7 @@ const elements = {
   blackWinrate: byId("black-winrate"), currentWinrate: byId("current-winrate"),
   userWinrate: byId("user-winrate"), userWinrateRow: byId("user-winrate-row"),
   responseKind: byId("response-kind"),
+  glossary: byId("analysis-glossary"), glossaryLink: byId("glossary-link"),
   terminalBanner: byId("terminal-banner"), terminalTitle: byId("terminal-title"),
   terminalMessage: byId("terminal-message"), taskBanner: byId("task-banner"),
   taskTitle: byId("task-title"), taskMessage: byId("task-message"),
@@ -103,7 +124,8 @@ let legalMoves = [];
 let legalityState = "pending";
 let legalityGeneration = 0;
 let minimumGradeVisits = MIN_GRADE_VISITS;
-let trainingContractReady = false;
+let engineState = "unknown";
+let trainingContractState = "pending";
 let allCandidates = [];
 let fullPolicy = [];
 let currentAnalysis = null;
@@ -145,11 +167,6 @@ function positionKey(value = gameDocument.moves) {
 }
 function cloneMoves(value = gameDocument.moves) { return value.map(([player, move]) => [player, move]); }
 function analysisIsLive() { return ["requested", "streaming"].includes(analysisJob?.state); }
-function analysisErrorTargetsLiveJob(message) {
-  return analysisIsLive()
-    && typeof message?.clientRequestId === "string"
-    && message.clientRequestId === analysisJob.clientRequestId;
-}
 function selectedEndCondition() { return parseEndCondition(elements.stopPly.value); }
 function hasReachedPracticeLimit() {
   return Boolean(practice.attempt?.settings)
@@ -268,7 +285,8 @@ function currentViewInput() {
   return {
     mode: elements.mode.value,
     connected: socket?.readyState === WebSocket.OPEN,
-    trainingContractReady,
+    engineState,
+    trainingContractState,
     legalityState,
     positionState: gameDocument.positionState,
     practice: {
@@ -318,15 +336,15 @@ function notice(text, isError = false) {
 }
 
 function drawBoard() {
-  context.clearRect(0, 0, canvas.width, canvas.height);
+  context.clearRect(0, 0, BOARD_CANVAS_SIZE, BOARD_CANVAS_SIZE);
   context.fillStyle = "#d8a85c";
-  context.fillRect(0, 0, canvas.width, canvas.height);
+  context.fillRect(0, 0, BOARD_CANVAS_SIZE, BOARD_CANVAS_SIZE);
   context.strokeStyle = "#493519";
   context.lineWidth = 1.35;
   for (let index = 0; index < BOARD_SIZE; index += 1) {
     const position = margin + index * spacing;
-    context.beginPath(); context.moveTo(margin, position); context.lineTo(canvas.width - margin, position); context.stroke();
-    context.beginPath(); context.moveTo(position, margin); context.lineTo(position, canvas.height - margin); context.stroke();
+    context.beginPath(); context.moveTo(margin, position); context.lineTo(BOARD_CANVAS_SIZE - margin, position); context.stroke();
+    context.beginPath(); context.moveTo(position, margin); context.lineTo(position, BOARD_CANVAS_SIZE - margin); context.stroke();
   }
   context.fillStyle = "#493519";
   for (const [x, y] of [[3, 3], [11, 3], [7, 7], [3, 11], [11, 11]]) {
@@ -436,25 +454,25 @@ function drawCandidateOverlays() {
     context.fillStyle = first ? "white" : "#173f33";
     context.font = "bold 10px ui-monospace, monospace";
     context.fillText(`${candidate.move}  Order ${orderLabel}`, box.x + 4, box.y + 9);
-    context.font = "9px ui-monospace, monospace";
-    context.fillText(`V ${percent(candidate.visitShare)}`, box.x + 4, box.y + 21);
-    context.fillText(`P ${percent(candidate.rawPrior)}`, box.x + 4, box.y + 32);
-    context.fillText(`B ${percent(candidate.blackWinrate)}`, box.x + 4, box.y + 43);
+    context.font = "10px ui-monospace, monospace";
+    context.fillText(`Visits ${percent(candidate.visitShare)}`, box.x + 4, box.y + 22);
+    context.fillText(`Policy ${percent(candidate.rawPrior)}`, box.x + 4, box.y + 35);
+    context.fillText(`Black ${percent(candidate.blackWinrate)}`, box.x + 4, box.y + 48);
     context.textAlign = "center";
     candidateHitAreas.push({ move: candidate.move, px, py, radius: Math.max(radius, 18), box });
   });
 }
 
 function findLabelBox(px, py, existing, index) {
-  const width = 104;
-  const height = 48;
-  const offsets = [[18, -52], [-122, -52], [18, 8], [-122, 8], [-52, -76], [-52, 28]];
+  const width = 126;
+  const height = 54;
+  const offsets = [[18, -58], [-144, -58], [18, 8], [-144, 8], [-63, -82], [-63, 28]];
   let best;
   let bestPenalty = Infinity;
   offsets.forEach(([dx, dy], offsetIndex) => {
     const box = {
-      x: Math.max(29, Math.min(canvas.width - width - 6, px + dx)),
-      y: Math.max(5, Math.min(canvas.height - height - 5, py + dy)), width, height,
+      x: Math.max(29, Math.min(BOARD_CANVAS_SIZE - width - 6, px + dx)),
+      y: Math.max(5, Math.min(BOARD_CANVAS_SIZE - height - 5, py + dy)), width, height,
     };
     const overlap = existing.reduce((total, other) => total + rectangleOverlap(box, other), 0);
     const penalty = overlap + offsetIndex * .01 + index * .001;
@@ -507,7 +525,7 @@ function applyPositionState(state, responseRevision = gameDocument.revision) {
     // no live AnalysisJob or late engine response may survive the official
     // BoardHistory result.
     cancelAnalysis();
-    elements.legalityStatus.textContent = `공식 BoardHistory 판정: ${terminalResultLabel(state)}`;
+    elements.legalityStatus.textContent = `KataGomo Renju 종국 판정: ${terminalResultLabel(state)}`;
     if (!wasTerminal || currentAnalysis || allCandidates.length || fullPolicy.length) {
       clearAnalysisDisplay({ keepStatus: true });
     }
@@ -515,7 +533,7 @@ function applyPositionState(state, responseRevision = gameDocument.revision) {
     elements.responseKind.textContent = "종국 · MCTS 미실행";
   } else {
     elements.legalityStatus.textContent = nextPlayer() === "B"
-      ? `공식 Board::isForbidden() 결과: 흑 금수 ${forbiddenMoves.size}곳`
+      ? `KataGomo 금수 판정: 흑 금수 ${forbiddenMoves.size}곳`
       : "백 차례: 흑 금수 규칙을 적용하지 않습니다.";
   }
   drawBoard();
@@ -549,7 +567,7 @@ async function refreshLegality() {
     legalMoves = [];
     legalityState = "error";
     gameDocument = withoutOfficialPositionState(gameDocument);
-    elements.legalityStatus.textContent = `금수 helper 오류 — 안전을 위해 착수를 차단합니다: ${error.message}`;
+    elements.legalityStatus.textContent = `금수 판정 오류 — 안전을 위해 착수를 차단합니다: ${error.message}`;
     elements.legalityStatus.classList.add("error");
   }
   drawBoard();
@@ -596,95 +614,103 @@ function currentAnalysisIdentity() {
 }
 
 function handleMessage(message) {
-  if (message.type === "position") {
-    if (!analysisJob || !analysisContext || !isAnalysisResponseCurrent(
-      analysisJob, message, currentAnalysisIdentity(),
-    )) return;
+  if (message?.engine) updateEngineBadge(message.engine);
+  const decision = decideWebSocketMessage({
+    message,
+    job: analysisJob,
+    analysisContext,
+    currentIdentity: currentAnalysisIdentity(),
+    currentPositionKey: positionKey(),
+    positionIsTerminal: Boolean(gameDocument.positionState?.isTerminal),
+  });
+
+  if (decision.kind === "position-terminal") {
     const responseRevision = analysisJob.positionRevision;
     analysisJob = transitionAnalysisJob(analysisJob, "interrupted");
     if (message.gameState
       && !applyPositionState(message.gameState, responseRevision)) return;
+    updateEngineBadge({ state: "ready" });
     setAnalysisStatus("종국 · MCTS 미실행", "neutral");
     notice(`${terminalResultLabel(message.gameState)} — 공식 종국 위치는 MCTS에 보내지 않습니다.`);
     if (practice.active) void beginPracticeTurn(practice.token);
     updateControls();
     return;
   }
-  if (message.type === "warning") {
-    if (!analysisJob || !isAnalysisResponseCurrent(
-      analysisJob, message, currentAnalysisIdentity(),
-    )) return;
+  if (decision.kind === "position-invalid") {
+    analysisJob = transitionAnalysisJob(analysisJob, "failed");
+    discardIncompleteAnalysis("오류 · 잘못된 종국 응답 폐기");
+    setAnalysisStatus("종국 응답 계약 오류", "error");
+    if (practice.active) setPracticePhase("error", "종국 판정 오류", "error");
+    notice("서버의 position 응답이 공식 종국 상태를 포함하지 않아 적용하지 않았습니다.", true);
+    updateControls();
+    return;
+  }
+  if (decision.kind === "warning-current") {
     setAnalysisStatus(`${message.code || "engine_warning"}: ${message.message}`, "busy");
     notice(`엔진 경고: ${message.message}`);
     updateControls();
     return;
   }
-  if (message.type === "error") {
-    if (!analysisErrorTargetsLiveJob(message)) {
-      if (analysisIsLive() && !message.clientRequestId) {
-        notice(`보조 WebSocket 오류(${message.code || "unknown"})는 현재 분석 요청과 연결되지 않아 분석을 계속합니다.`, true);
-      }
-      return;
-    }
+  if (decision.kind === "error-auxiliary") {
+    notice(`보조 WebSocket 오류(${message.code || "unknown"})는 현재 분석 요청과 연결되지 않아 분석을 계속합니다.`, true);
+    return;
+  }
+  if (decision.kind === "error-current") {
     analysisJob = transitionAnalysisJob(analysisJob, "failed");
     discardIncompleteAnalysis("오류 · 부분 결과 폐기");
     setAnalysisStatus(`${message.code || "engine_error"}: ${message.message}`, "error");
     if (practice.active) setPracticePhase("error", "분석 오류", "error");
     notice(`엔진 오류: ${message.message}`, true);
+    if (!message.engine) void refreshStatus();
     updateControls();
     return;
   }
-  if (message.type === "status") {
-    updateEngineBadge(message.engine);
-    if (message.status === "analyzing") {
-      if (!analysisJob || !isAnalysisResponseCurrent(
-        analysisJob, message, currentAnalysisIdentity(),
-      )) return;
-      analysisJob = transitionAnalysisJob(analysisJob, "streaming");
-      elements.requestId.textContent = message.requestId || "—";
-      setAnalysisStatus("분석 중", "busy");
-    } else if (message.status === "canceled") {
-      if (analysisJob?.state !== "canceled"
-        || message.clientRequestId !== analysisJob.clientRequestId) return;
-      setAnalysisStatus("취소됨", "neutral");
-      elements.responseKind.textContent = "취소됨";
-    } else if (["idle", "connected"].includes(message.status) && !analysisIsLive()) {
-      setAnalysisStatus(message.status === "connected" ? "연결됨" : "분석 대기", "neutral");
-    }
+  if (decision.kind === "status-analyzing") {
+    analysisJob = transitionAnalysisJob(analysisJob, "streaming");
+    elements.requestId.textContent = message.requestId || "—";
+    setAnalysisStatus("분석 중", "busy");
     updateControls();
     return;
   }
-  if (message.type !== "analysis" || !analysisJob || !analysisContext) return;
-  if (gameDocument.positionState?.isTerminal) {
+  if (decision.kind === "status-canceled") {
+    setAnalysisStatus("취소됨", "neutral");
+    elements.responseKind.textContent = "취소됨";
+    updateControls();
+    return;
+  }
+  if (["status-idle", "status-connected"].includes(decision.kind)) {
+    setAnalysisStatus(decision.kind === "status-connected" ? "연결됨" : "분석 대기", "neutral");
+    updateControls();
+    return;
+  }
+  if (decision.kind === "status-engine-only") {
+    updateControls();
+    return;
+  }
+  if (decision.kind === "analysis-after-terminal") {
     cancelAnalysis();
     clearAnalysisDisplay({ keepStatus: true });
     updateControls();
     return;
   }
-  if (!isAnalysisResponseCurrent(analysisJob, message, currentAnalysisIdentity())) return;
   const meta = analysisContext;
-  if (meta.positionKey !== positionKey()) return;
-  const metadataMismatch = Number(message.positionRevision) !== analysisJob.positionRevision
-    || Number(message.positionMoveCount) !== meta.ply
-    || (!message.noResults && Number(message.turnNumber) !== meta.ply)
-    || Number(message.requestedMaxVisits) !== analysisJob.requestedMaxVisits
-    || message.analysisPurpose !== analysisJob.analysisPurpose
-    || (message.sessionEpoch ?? null) !== analysisJob.sessionEpoch;
-  if (metadataMismatch) {
+  if (decision.kind === "analysis-metadata-mismatch") {
     analysisJob = transitionAnalysisJob(analysisJob, "failed");
     discardIncompleteAnalysis("오류 · 오래된 부분 결과 폐기");
     setAnalysisStatus("응답 메타데이터 불일치", "error");
     if (practice.active) setPracticePhase("error", "오래된 응답 차단", "error");
-    notice("엔진 응답의 위치 revision/수순/purpose가 현재 요청과 달라 적용하지 않았습니다.", true);
+    notice("엔진 응답의 요청 정보가 현재 위치와 달라 오래된 결과로 보고 적용하지 않았습니다.", true);
     updateControls();
     return;
   }
+  if (!["analysis-no-results", "analysis-partial", "analysis-final"].includes(decision.kind)) return;
   const accepted = applyAnalysisResponse(
     analysisJob, message, currentAnalysisIdentity(),
   );
   if (!accepted.accepted) return;
   analysisJob = accepted.job;
-  if (analysisJob.state === "interrupted") {
+  if (decision.kind === "analysis-no-results") {
+    updateEngineBadge({ state: "ready" });
     discardIncompleteAnalysis("noResults · 부분 결과 폐기");
     setAnalysisStatus("분석 중단 · 결과 없음", "error");
     if (practice.active) setPracticePhase("error", "분석 중단", "error");
@@ -696,8 +722,9 @@ function handleMessage(message) {
   allCandidates = Array.isArray(message.candidates) ? message.candidates : [];
   fullPolicy = Array.isArray(message.policy) ? message.policy : [];
   renderAnalysis(message);
-  if (analysisJob.state !== "final") return;
-  setAnalysisStatus(message.analysisInsufficient ? "최종 · 분석 부족" : "최종 결과", message.analysisInsufficient ? "busy" : "");
+  if (decision.kind !== "analysis-final") return;
+  updateEngineBadge({ state: "ready" });
+  setAnalysisStatus(message.analysisInsufficient ? "최종 · 분석 부족" : "최종 결과", message.analysisInsufficient ? "insufficient" : "");
   updateControls();
   if (practice.active) void processPracticeFinal(message, meta);
 }
@@ -720,13 +747,42 @@ function renderAnalysis(message) {
   drawBoard();
 }
 
+function captureCandidateTableFocus() {
+  const active = document.activeElement;
+  if (!active?.classList?.contains("candidate-row") || !elements.candidates.contains(active)) return null;
+  const scrollContainer = elements.candidates.closest(".table-wrap");
+  return {
+    move: active.dataset.move,
+    scrollContainer,
+    scrollLeft: scrollContainer?.scrollLeft ?? 0,
+    scrollTop: scrollContainer?.scrollTop ?? 0,
+  };
+}
+
+function restoreCandidateTableFocus(snapshot) {
+  if (!snapshot) return;
+  const matchingRow = [...elements.candidates.querySelectorAll(".candidate-row")]
+    .find((row) => row.dataset.move === snapshot.move);
+  if (!matchingRow) {
+    if (hoveredCandidateMove === snapshot.move) hoveredCandidateMove = null;
+    return;
+  }
+  matchingRow.focus({ preventScroll: true });
+  if (snapshot.scrollContainer) {
+    snapshot.scrollContainer.scrollLeft = snapshot.scrollLeft;
+    snapshot.scrollContainer.scrollTop = snapshot.scrollTop;
+  }
+}
+
 function renderCandidates() {
+  const focusSnapshot = captureCandidateTableFocus();
   const shown = visibleCandidates();
   if (!shown.length) {
     const message = gameDocument.positionState?.isTerminal
       ? "종국 위치 · MCTS 분석 미실행"
       : currentAnalysis ? "후보 없음 · 분석 부족" : "현재 위치를 분석하면 MCTS 후보가 표시됩니다.";
     elements.candidates.innerHTML = `<tr><td colspan="7" class="empty">${message}</td></tr>`;
+    restoreCandidateTableFocus(focusSnapshot);
     return;
   }
   elements.candidates.innerHTML = shown.map((candidate) => {
@@ -750,11 +806,13 @@ function renderCandidates() {
     row.addEventListener("mouseenter", () => focusCandidate(row.dataset.move, false));
     row.addEventListener("mouseleave", () => focusCandidate(null, false));
     row.addEventListener("focus", () => focusCandidate(row.dataset.move, false));
+    row.addEventListener("blur", () => focusCandidate(null, false));
     row.addEventListener("click", () => focusCandidate(row.dataset.move, true));
     row.addEventListener("keydown", (event) => {
       if (["Enter", " "].includes(event.key)) { event.preventDefault(); focusCandidate(row.dataset.move, true); }
     });
   });
+  restoreCandidateTableFocus(focusSnapshot);
 }
 
 function rawPolicyEntries(limit = Number(elements.topCount.value)) {
@@ -777,8 +835,15 @@ function focusCandidate(move, pin) {
   if (pin) pinnedCandidateMove = pinnedCandidateMove === move ? null : move;
   else hoveredCandidateMove = move;
   renderCandidateFocus();
-  renderCandidates();
+  updateCandidateRowState();
   drawBoard();
+}
+function updateCandidateRowState() {
+  const focusedMove = pinnedCandidateMove || hoveredCandidateMove;
+  elements.candidates.querySelectorAll(".candidate-row").forEach((row) => {
+    row.classList.toggle("is-focused", row.dataset.move === focusedMove);
+    row.setAttribute("aria-selected", String(row.dataset.move === pinnedCandidateMove));
+  });
 }
 function renderCandidateFocus() {
   const candidate = focusedCandidate();
@@ -841,6 +906,11 @@ function requestAnalysis(purpose = "manual") {
     notice(`${terminalResultLabel()} 위치는 이미 끝났으므로 분석을 시작하지 않습니다.`, true);
     return false;
   }
+  if (engineState !== "ready") {
+    notice("KataGomo 엔진이 준비된 뒤 분석을 시작할 수 있습니다.", true);
+    updateControls();
+    return false;
+  }
   if (analysisIsLive()) cancelAnalysis();
   const clientRequestId = crypto.randomUUID();
   const purposeMap = {
@@ -888,6 +958,11 @@ function requestAnalysis(purpose = "manual") {
 }
 
 async function startPractice(startMoves = null, { continuedFromPly = null } = {}) {
+  if (engineState !== "ready" || trainingContractState !== "ready") {
+    notice("엔진과 연습 설정 확인이 끝난 뒤 AI 연습을 시작할 수 있습니다.", true);
+    updateControls();
+    return false;
+  }
   cancelAnalysis({ preservePractice: false });
   if (startMoves) {
     gameDocument = replaceGameMoves(gameDocument, startMoves);
@@ -1024,7 +1099,7 @@ async function finalizePendingRecord(afterAnalysis, terminalState = null) {
     if (body.clientEvaluationId !== clientEvaluationId || body.sessionEpoch !== expectedEpoch
       || Number(body.prePositionRevision) !== pending.prePositionRevision
       || Number(body.postPositionRevision) !== expectedRevision) {
-      throw new Error("채점 응답의 세션/revision echo가 요청과 다릅니다");
+      throw new Error("채점 응답이 현재 연습 요청과 일치하지 않습니다");
     }
     if (!practice.active || practice.token !== expectedToken
       || practice.attempt.sessionEpoch !== expectedEpoch
@@ -1065,15 +1140,15 @@ async function playAiMove(analysis, token) {
   const candidate = (analysis.candidates || []).find((entry) => Number(entry.order) === 0);
   if (!candidate) {
     setPracticePhase("error", "AI 1위 후보 없음", "error");
-    notice("최종 엔진 응답에 order=0 추천 수가 없어 AI가 착수하지 않습니다.", true);
+    notice("최종 엔진 응답에 Order 0 추천 수가 없어 AI가 착수하지 않습니다.", true);
     return;
   }
   if (occupied(candidate.move) || forbiddenMoves.has(candidate.move) || !legalMoves.includes(candidate.move)) {
-    setPracticePhase("error", "엔진/helper 합법성 충돌", "error");
-    notice(`엔진 order=0 추천 ${candidate.move}가 공식 helper의 legalMoves에 없습니다. 다른 후보로 대체하지 않고 중단합니다.`, true);
+    setPracticePhase("error", "엔진과 합법 수 판정 충돌", "error");
+    notice(`엔진 Order 0 추천 ${candidate.move}가 KataGomo 합법 수 목록에 없습니다. 다른 후보로 대체하지 않고 중단합니다.`, true);
     return;
   }
-  notice(`AI가 최종 MCTS order=0 추천 ${candidate.move}를 선택했습니다.`);
+  notice(`AI가 최종 MCTS Order 0 추천 ${candidate.move}를 선택했습니다.`);
   aiTimer = setTimeout(async () => {
     aiTimer = null;
     if (!practiceIdentityMatches(token, epoch, revision)
@@ -1100,13 +1175,13 @@ async function attemptMove(move) {
   if (legalityState !== "ready") { notice("금수 확인이 끝날 때까지 착수할 수 없습니다.", true); return; }
   if (occupied(move)) { notice(`${move}에는 이미 돌이 있습니다.`, true); return; }
   if (forbiddenMoves.has(move)) {
-    elements.legalityStatus.textContent = `${move}는 공식 helper가 판정한 흑 금수라 착수할 수 없습니다.`;
+    elements.legalityStatus.textContent = `${move}는 KataGomo가 판정한 흑 금수라 착수할 수 없습니다.`;
     elements.legalityStatus.classList.add("error");
     notice(`${move} 착수가 차단되었습니다.`, true);
     return;
   }
   if (!legalMoves.includes(move)) {
-    notice(`${move}는 공식 helper의 legalMoves에 없어 착수할 수 없습니다.`, true);
+    notice(`${move}는 KataGomo 합법 수 목록에 없어 착수할 수 없습니다.`, true);
     return;
   }
   if (practice.active) {
@@ -1198,7 +1273,7 @@ async function finishPractice(completionReason = "manual") {
     if (!response.ok) throw new Error(body.detail || `HTTP ${response.status}`);
     if (body.clientSummaryId !== clientSummaryId || body.sessionEpoch !== expectedEpoch
       || Number(body.positionRevision) !== expectedRevision) {
-      throw new Error("요약 응답의 세션/revision echo가 요청과 다릅니다");
+      throw new Error("요약 응답이 현재 연습 요청과 일치하지 않습니다");
     }
     summary = body;
   } catch (error) {
@@ -1461,8 +1536,8 @@ function setReviewPly(ply) {
 
 function drawHistoryReviewBoard() {
   const ctx = reviewContext;
-  const width = reviewCanvas.width;
-  const height = reviewCanvas.height;
+  const width = REVIEW_CANVAS_SIZE;
+  const height = REVIEW_CANVAS_SIZE;
   const reviewMargin = 36;
   const reviewSpacing = (width - reviewMargin * 2) / (BOARD_SIZE - 1);
   ctx.clearRect(0, 0, width, height);
@@ -1510,7 +1585,7 @@ function drawHistoryReviewBoard() {
 
 function renderReviewCandidateTable(snapshot) {
   const candidates = snapshot?.candidates || [];
-  if (!candidates.length) return '<p class="insufficient">이 기록에는 compact 후보 snapshot이 없습니다. 기존 v1에서 변환된 기록일 수 있습니다.</p>';
+  if (!candidates.length) return '<p class="insufficient">이 기록에는 저장된 후보 분석이 없습니다. 이전 저장 형식에서 변환된 기록일 수 있습니다.</p>';
   return `<div class="table-wrap"><table class="review-candidates">
     <caption class="sr-only">선택한 사용자 착수 직전 저장된 KataGomo 후보와 PV</caption>
     <thead><tr><th>Order</th><th>Move</th><th>Raw policy</th><th>Visits</th><th>Visit share</th><th>Winrate (Black)</th><th>PV</th></tr></thead>
@@ -1545,10 +1620,10 @@ function renderHistoryReview() {
       <div><small>Winrate (User) 전→후</small><strong>${percent(value.beforeUserWinrate)} → ${percent(value.afterUserWinrate)} (${percentagePoints(value.winrateDelta)})</strong></div>
       <div><small>추천 대비 Winrate</small><strong>${insufficient ? "분석 부족" : percentagePoints(-value.recommendedWinrateGap)}</strong></div>
       <div><small>Root visits 전/후</small><strong>${value.preRootVisits ?? "—"} / ${value.postRootVisits ?? "—"}</strong></div>
-      <div><small>Snapshot Winrate (Black)</small><strong>${percent(snapshot?.rootInfo?.blackWinrate)}</strong></div>
+      <div><small>저장된 Winrate (Black)</small><strong>${percent(snapshot?.rootInfo?.blackWinrate)}</strong></div>
       <div><small>분석 상태</small><strong>${insufficient ? "분석 부족" : "최종 분석"}</strong></div>
     </div>
-    <p>${insufficient ? `분석 부족: ${escapeHtml((value.analysisInsufficientReasons || []).join(", ") || "visits 기준 미달")}` : "아래 후보와 PV는 사용자가 이 수를 두기 직전의 compact snapshot입니다."}</p>`;
+    <p>${insufficient ? `분석 부족: ${escapeHtml((value.analysisInsufficientReasons || []).join(", ") || "visits 기준 미달")}` : "아래 후보와 PV는 사용자가 이 수를 두기 직전에 저장한 분석입니다."}</p>`;
   }
   const mistakeLinks = mistakes.length
     ? `<h3>가장 큰 실수</h3><div class="review-mistakes">${mistakes.map((mistakePly) => {
@@ -1602,6 +1677,8 @@ const VIEW_ACTION_ELEMENTS = Object.freeze({
   "new-opening": elements.newOpening,
   reset: elements.reset,
   "review-start-practice": elements.reviewStartPractice,
+  "retry-legality": elements.retryLegality,
+  "retry-training": elements.retryTraining,
 });
 
 function renderViewState(view) {
@@ -1635,6 +1712,9 @@ function renderViewState(view) {
 
   const boardInteractive = canPlaceMove(view);
   canvas.classList.toggle("locked", !boardInteractive);
+  canvas.dataset.interaction = boardInteractive
+    ? "ready"
+    : view.task.tone === "busy" ? "busy" : "blocked";
   canvas.dataset.primary = String(view.primaryAction === "board" && boardInteractive);
   canvas.setAttribute("aria-disabled", String(!boardInteractive));
   if (view.clearAnalysis) {
@@ -1656,13 +1736,13 @@ function updateControls() {
   updateModeUi();
   elements.practiceStart.textContent = practice.ended ? "현재 위치에서 새 연습" : "이 위치에서 연습 시작";
   elements.analyze.textContent = practice.active ? "현재 단계 재분석" : "현재 위치 분석";
-  elements.practiceFinish.disabled = !connected || !practice.active || busy
+  elements.practiceFinish.disabled = !connected || engineState !== "ready" || !practice.active || busy
     || practice.phase !== "user_turn" || Boolean(practice.pendingRecord) || Boolean(aiTimer)
     || practice.attempt.turnRecords.length === 0 || Boolean(reviewSession);
   const baseLength = practice.active || practice.ended ? practice.attempt.openingMoves.length : 0;
   elements.undo.disabled = gameDocument.moves.length <= baseLength || busy
     || legalityState !== "ready" || Boolean(reviewSession);
-  elements.sameStart.disabled = !connected || !trainingContractReady
+  elements.sameStart.disabled = !connected || engineState !== "ready" || trainingContractState !== "ready"
     || practice.active || !practice.ended || practice.summaryPending || Boolean(reviewSession);
   renderViewState(currentViewState());
 }
@@ -1733,6 +1813,16 @@ async function undoMove() {
   }
 }
 async function resetBoard() {
+  const confirmReset = resetNeedsConfirmation({
+    moveCount: gameDocument.moves.length,
+    practiceActive: practice.active,
+    practiceEnded: practice.ended,
+    analysisPresent: analysisIsLive() || Boolean(currentAnalysis)
+      || allCandidates.length > 0 || fullPolicy.length > 0,
+  });
+  if (confirmReset && !window.confirm("현재 수순과 연습·분석 상태를 지우고 새 판을 시작할까요?")) {
+    return false;
+  }
   cancelAnalysis({ preservePractice: false });
   practice = emptyPractice(practice.token + 1);
   gameDocument = replaceGameMoves(gameDocument, []);
@@ -1744,19 +1834,15 @@ async function resetBoard() {
   clearAnalysisDisplay();
   notice("빈 오목판으로 초기화했습니다.");
   await refreshLegality();
+  return true;
 }
 
 function canvasPoint(event) {
-  const rectangle = canvas.getBoundingClientRect();
-  return {
-    x: (event.clientX - rectangle.left) * canvas.width / rectangle.width,
-    y: (event.clientY - rectangle.top) * canvas.height / rectangle.height,
-  };
-}
-function candidateAtPoint(px, py) {
-  return candidateHitAreas.find((area) =>
-    Math.hypot(px - area.px, py - area.py) <= area.radius
-      || (px >= area.box.x && px <= area.box.x + area.box.width && py >= area.box.y && py <= area.box.y + area.box.height));
+  return clientPointToCanvas(
+    event,
+    canvas.getBoundingClientRect(),
+    BOARD_CANVAS_SIZE,
+  );
 }
 function intersectionAtPoint(px, py) {
   const x = Math.round((px - margin) / spacing);
@@ -1768,7 +1854,7 @@ function intersectionAtPoint(px, py) {
 
 canvas.addEventListener("pointermove", (event) => {
   const { x, y } = canvasPoint(event);
-  const hit = candidateAtPoint(x, y);
+  const hit = candidateHitAtPoint(candidateHitAreas, { x, y });
   const next = hit?.move || null;
   if (next !== hoveredCandidateMove) focusCandidate(next, false);
 });
@@ -1776,17 +1862,24 @@ canvas.addEventListener("pointerleave", () => focusCandidate(null, false));
 canvas.addEventListener("click", async (event) => {
   const point = canvasPoint(event);
   const intersection = intersectionAtPoint(point.x, point.y);
-  const candidate = candidateAtPoint(point.x, point.y);
-  if (!intersection && candidate) { focusCandidate(candidate.move, true); return; }
-  if (!intersection) return;
-  boardCursor = { x: intersection.x, y: intersection.y };
-  if (!canPlaceMove()) {
-    if (candidate) focusCandidate(candidate.move, true);
-    else if (practice.ended) notice("완료된 연습판입니다. 현재 판 이어서 연습, 같은 시작점 또는 새 판 버튼을 사용하세요.", true);
+  const candidateHit = candidateHitAtPoint(candidateHitAreas, point);
+  const intent = resolveBoardPointerIntent({
+    candidateHit,
+    intersection,
+    boardInteractive: canPlaceMove(),
+  });
+  if (intent.kind === "focus-candidate") {
+    focusCandidate(intent.move, true);
+    return;
+  }
+  if (intent.kind === "none") return;
+  if (intersection) boardCursor = { x: intersection.x, y: intersection.y };
+  if (intent.kind === "blocked") {
+    if (practice.ended) notice("완료된 연습판입니다. 현재 판 이어서 연습, 같은 시작점 또는 새 판 버튼을 사용하세요.", true);
     else notice(practice.active ? "최종 분석 또는 AI 착수를 기다리는 중입니다." : "분석 취소 또는 금수 확인을 기다려 주세요.", true);
     return;
   }
-  await attemptMove(intersection.move);
+  await attemptMove(intent.move);
 });
 canvas.addEventListener("keydown", async (event) => {
   const deltas = { ArrowLeft: [-1, 0], ArrowRight: [1, 0], ArrowUp: [0, -1], ArrowDown: [0, 1] };
@@ -1805,6 +1898,9 @@ canvas.addEventListener("focus", drawBoard);
 canvas.addEventListener("blur", drawBoard);
 
 elements.practiceStart.addEventListener("click", () => startPractice());
+elements.retryLegality.addEventListener("click", () => { void refreshLegality(); });
+elements.retryTraining.addEventListener("click", () => { void refreshTrainingOptions(); });
+elements.glossaryLink.addEventListener("click", () => { elements.glossary.open = true; });
 elements.analyze.addEventListener("click", () => {
   if (!practice.active) requestAnalysis("manual");
   else if (nextPlayer() === practice.attempt.settings.userColor && !practice.pendingRecord) requestAnalysis("prepare-user");
@@ -1885,35 +1981,44 @@ function updateEngineBadge(engine) {
     stopped: "엔진 중지됨",
     error: "엔진 오류",
   };
-  const label = labels[engine.state] || "엔진 상태 확인 중";
-  const className = engine.state === "error"
+  const normalizedState = Object.hasOwn(labels, engine.state) ? engine.state : "unknown";
+  engineState = normalizedState;
+  const label = labels[normalizedState] || "엔진 상태 확인 중";
+  const className = normalizedState === "error"
     ? "status error"
-    : ["starting", "analyzing", "restarting", "stopping"].includes(engine.state)
+    : ["starting", "analyzing", "restarting", "stopping", "unknown"].includes(normalizedState)
       ? "status busy"
-      : engine.state === "stopped" ? "status neutral" : "status";
+      : normalizedState === "stopped" ? "status neutral" : "status";
   if (elements.engineStatus.textContent !== label) elements.engineStatus.textContent = label;
   elements.engineStatus.className = className;
-  elements.engineDiagnosticState.textContent = `${label} (${engine.state || "unknown"})`;
-  elements.enginePid.textContent = String(engine.pid ?? "—");
-  elements.engineRestarts.textContent = `${engine.restartCount ?? "—"} / ${engine.restartLimit ?? "—"}`;
-  elements.engineLastError.textContent = engine.lastError || "—";
+  elements.engineDiagnosticState.textContent = `${label} (${normalizedState})`;
+  if (Object.hasOwn(engine, "pid")) elements.enginePid.textContent = String(engine.pid ?? "—");
+  if (Object.hasOwn(engine, "restartCount") || Object.hasOwn(engine, "restartLimit")) {
+    elements.engineRestarts.textContent = `${engine.restartCount ?? "—"} / ${engine.restartLimit ?? "—"}`;
+  }
+  if (Object.hasOwn(engine, "lastError")) elements.engineLastError.textContent = engine.lastError || "—";
 }
 async function refreshStatus() {
   try {
     const response = await fetch("/api/status");
     if (!response.ok) throw new Error(`HTTP ${response.status}`);
     updateEngineBadge((await response.json()).engine);
+    updateControls();
   } catch (error) {
+    engineState = "error";
     elements.engineStatus.textContent = `서버 상태 오류: ${error.message}`;
     elements.engineStatus.className = "status error";
     elements.engineDiagnosticState.textContent = "서버 상태 확인 실패";
     elements.enginePid.textContent = "—";
     elements.engineRestarts.textContent = "—";
     elements.engineLastError.textContent = error.message;
+    updateControls();
   }
 }
 
 async function refreshTrainingOptions() {
+  trainingContractState = "pending";
+  updateControls();
   try {
     const response = await fetch("/api/training/options");
     if (!response.ok) throw new Error(`HTTP ${response.status}`);
@@ -1926,10 +2031,10 @@ async function refreshTrainingOptions() {
     }
     minimumGradeVisits = Number(options.minimumCandidateVisits);
     if (!Number.isInteger(minimumGradeVisits) || minimumGradeVisits < 0) throw new Error("잘못된 최소 visits");
-    trainingContractReady = true;
+    trainingContractState = "ready";
     updateControls();
   } catch (error) {
-    trainingContractReady = false;
+    trainingContractState = "error";
     notice(`연습 설정 계약을 확인하지 못했습니다: ${error.message}`, true);
     updateControls();
   }
@@ -1942,4 +2047,4 @@ connectWebSocket();
 refreshStatus();
 refreshTrainingOptions();
 updateControls();
-setInterval(refreshStatus, 2000);
+setInterval(refreshStatus, 5000);

@@ -9,7 +9,8 @@ import {
 const READY = Object.freeze({
   mode: "practice",
   connected: true,
-  trainingContractReady: true,
+  engineState: "ready",
+  trainingContractState: "ready",
   legalityState: "ready",
 });
 
@@ -107,7 +108,7 @@ test("official terminal state dominates review, search, and practice and clears 
   assert.equal(view.terminal.visible, true);
   assert.equal(view.terminal.outcome, "black_win");
   assert.equal(view.terminal.title, "흑 승");
-  assert.match(view.terminal.message, /공식 KataGomo BoardHistory/);
+  assert.match(view.terminal.message, /KataGomo의 공식 Renju 종국 판정/);
   assert.match(view.terminal.message, /MCTS 분석하지 않습니다/);
   assert.equal(view.clearAnalysis, true);
   assert.equal(view.boardInteractive, false);
@@ -184,7 +185,49 @@ test("disconnection and legality failure take priority over ordinary session sta
   });
   assert.equal(helperError.key, "legality-error");
   assert.equal(helperError.boardInteractive, false);
-  assert.equal(helperError.primaryAction, null);
+  assert.equal(helperError.primaryAction, "retry-legality");
+  assert.deepEqual(primaryActions(helperError), ["retry-legality"]);
+});
+
+test("only a ready engine enables new analysis and AI practice", () => {
+  for (const engineState of ["unknown", "starting", "analyzing", "restarting", "stopping"]) {
+    const view = deriveViewState({ ...READY, engineState });
+    assert.equal(view.key, "engine-pending");
+    assert.equal(view.task.tone, "busy");
+    assert.equal(view.actions.analyze.enabled, false);
+    assert.equal(view.actions["practice-start"].enabled, false);
+    assert.equal(view.boardInteractive, true, "setup board editing remains local");
+  }
+  for (const engineState of ["stopped", "error"]) {
+    const view = deriveViewState({ ...READY, engineState });
+    assert.equal(view.key, "engine-unavailable");
+    assert.equal(view.task.tone, "error");
+    assert.equal(view.actions.analyze.enabled, false);
+    assert.equal(view.actions["practice-start"].enabled, false);
+  }
+});
+
+test("training contract pending and error are distinct and retryable", () => {
+  const pending = deriveViewState({ ...READY, trainingContractState: "pending" });
+  assert.equal(pending.key, "practice-contract-pending");
+  assert.equal(pending.task.tone, "busy");
+  assert.equal(pending.primaryAction, "analyze");
+  assert.equal(pending.actions["retry-training"].visible, false);
+
+  const failed = deriveViewState({ ...READY, trainingContractState: "error" });
+  assert.equal(failed.key, "practice-contract-error");
+  assert.equal(failed.task.tone, "error");
+  assert.equal(failed.primaryAction, "retry-training");
+  assert.deepEqual(primaryActions(failed), ["retry-training"]);
+  assert.equal(failed.actions.analyze.enabled, true);
+
+  const freeAnalysis = deriveViewState({
+    ...READY,
+    mode: "analysis",
+    trainingContractState: "error",
+  });
+  assert.equal(freeAnalysis.key, "free-analysis");
+  assert.equal(freeAnalysis.primaryAction, "analyze");
 });
 
 test("practice summarizing and completion have explicit continuation states", () => {
@@ -239,6 +282,8 @@ test("every supported state combination has at most one visible enabled primary 
   const modes = ["practice", "analysis"];
   const booleans = [false, true];
   const legalities = ["pending", "ready", "error"];
+  const engineStates = ["unknown", "ready", "analyzing", "error"];
+  const trainingContractStates = ["pending", "ready", "error"];
   const positions = [null, terminalState("black_win", "line_win")];
   const practices = [
     {},
@@ -263,32 +308,35 @@ test("every supported state combination has at most one visible enabled primary 
   let combinations = 0;
   for (const mode of modes) {
     for (const connected of booleans) {
-      for (const trainingContractReady of booleans) {
-        for (const legalityState of legalities) {
-          for (const positionState of positions) {
-            for (const reviewActive of booleans) {
-              for (const practice of practices) {
-                for (const analysis of analyses) {
-                  combinations += 1;
-                  const view = deriveViewState({
-                    mode,
-                    connected,
-                    trainingContractReady,
-                    legalityState,
-                    positionState,
-                    reviewActive,
-                    practice,
-                    analysis,
-                  });
-                  const primaries = primaryActions(view);
-                  assert.ok(primaries.length <= 1, JSON.stringify({ view, primaries }));
-                  assert.equal(
-                    view.primaryAction === null ? primaries.length : primaries[0],
-                    view.primaryAction === null ? 0 : view.primaryAction,
-                  );
-                  assert.ok(
-                    view.primaryAction === null || PRIMARY_ACTION_IDS.includes(view.primaryAction),
-                  );
+      for (const engineState of engineStates) {
+        for (const trainingContractState of trainingContractStates) {
+          for (const legalityState of legalities) {
+            for (const positionState of positions) {
+              for (const reviewActive of booleans) {
+                for (const practice of practices) {
+                  for (const analysis of analyses) {
+                    combinations += 1;
+                    const view = deriveViewState({
+                      mode,
+                      connected,
+                      engineState,
+                      trainingContractState,
+                      legalityState,
+                      positionState,
+                      reviewActive,
+                      practice,
+                      analysis,
+                    });
+                    const primaries = primaryActions(view);
+                    assert.ok(primaries.length <= 1, JSON.stringify({ view, primaries }));
+                    assert.equal(
+                      view.primaryAction === null ? primaries.length : primaries[0],
+                      view.primaryAction === null ? 0 : view.primaryAction,
+                    );
+                    assert.ok(
+                      view.primaryAction === null || PRIMARY_ACTION_IDS.includes(view.primaryAction),
+                    );
+                  }
                 }
               }
             }
@@ -297,7 +345,7 @@ test("every supported state combination has at most one visible enabled primary 
       }
     }
   }
-  assert.equal(combinations, 5_376);
+  assert.equal(combinations, 32_256);
 });
 
 test("the output is immutable JSON and invalid input is rejected", () => {
@@ -308,6 +356,11 @@ test("the output is immutable JSON and invalid input is rejected", () => {
   assert.equal(Object.isFrozen(view.actions.analyze), true);
   assert.throws(() => deriveViewState({ ...READY, mode: "gomoku" }), /mode/);
   assert.throws(() => deriveViewState({ ...READY, connected: "yes" }), /boolean/);
+  assert.throws(() => deriveViewState({ ...READY, engineState: "idle" }), /engineState/);
+  assert.throws(
+    () => deriveViewState({ ...READY, trainingContractState: "failed" }),
+    /trainingContractState/,
+  );
   assert.throws(
     () => deriveViewState({ ...READY, practice: { active: true, ended: true } }),
     /동시에 true/,

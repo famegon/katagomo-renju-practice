@@ -3,7 +3,9 @@
   <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <meta name="description" content="KataGomo 엔진으로 실행하는 로컬 15×15 Renju 연습·분석 플랫폼" />
     <title>KataGomo Renju Practice</title>
+    <link rel="icon" href="/static/favicon.svg" type="image/svg+xml" />
     <link rel="stylesheet" href="/static/styles.css" />
   </head>
   <body>
@@ -26,7 +28,7 @@
 
       <section id="terminal-banner" class="state-banner terminal-banner" role="alert" hidden>
         <div>
-          <p class="state-kicker">공식 BoardHistory 판정</p>
+          <p class="state-kicker">KataGomo Renju 판정</p>
           <h2 id="terminal-title">대국 종료</h2>
         </div>
         <p id="terminal-message">종국 결과를 확인하고 무르거나 새 판을 시작하세요.</p>
@@ -51,9 +53,9 @@
               width="760"
               height="760"
               tabindex="0"
-              role="img"
+              role="application"
               aria-disabled="true"
-              aria-label="15×15 Renju 오목판"
+              aria-label="15×15 Renju 오목판. 방향키로 이동하고 Enter 또는 Space로 착수합니다."
               aria-describedby="board-help board-summary"
             ></canvas>
             <p id="board-help" class="board-help">
@@ -62,7 +64,7 @@
             <p id="board-summary" class="sr-only" aria-live="polite">빈 오목판, 흑 차례</p>
             <div class="board-state">
               <p id="legality-status" class="notice" aria-live="polite">금수 정보를 확인 중입니다.</p>
-              <p id="action-notice" class="notice action-notice" aria-live="assertive"></p>
+              <p id="action-notice" class="notice action-notice" aria-live="polite"></p>
             </div>
             <div class="button-row board-actions" aria-label="보드 동작">
               <button id="undo" class="secondary" type="button">무르기</button>
@@ -152,6 +154,8 @@
                 <button id="analyze" class="secondary" type="button">현재 위치 분석</button>
               </div>
               <div class="button-row supporting-actions">
+                <button id="retry-legality" class="secondary" type="button" hidden>금수 판정 다시 시도</button>
+                <button id="retry-training" class="secondary" type="button" hidden>연습 설정 다시 확인</button>
                 <button id="practice-finish" class="secondary" type="button" disabled>현재 수에서 연습 종료</button>
                 <button id="cancel" class="danger" type="button" disabled>분석 취소</button>
               </div>
@@ -196,7 +200,7 @@
                 <p class="section-kicker">MCTS search</p>
                 <h2 id="candidate-heading">후보 수</h2>
               </div>
-              <span id="candidate-perspective">Winrate는 BLACK 관점</span>
+              <span id="candidate-perspective">Winrate는 BLACK 관점 · <a id="glossary-link" href="#analysis-glossary">용어 설명 ↓</a></span>
             </div>
 
             <div class="candidate-toolbar" aria-labelledby="overlay-heading">
@@ -348,7 +352,7 @@
                 <h2 id="history-heading">이 브라우저의 연습 기록</h2>
               </div>
               <div class="history-heading-actions">
-                <span><strong id="history-count">0</strong>판 저장</span>
+                <span>최근 <strong id="history-count">0</strong>판 저장 · 최대 20판</span>
                 <button id="history-clear" class="text-button danger-text" type="button" disabled>전체 삭제</button>
               </div>
             </div>
@@ -358,12 +362,12 @@
             </ol>
           </section>
 
-          <details class="card glossary-card">
+          <details id="analysis-glossary" class="card glossary-card">
             <summary>분석 용어 설명</summary>
             <dl class="glossary-list">
               <div>
                 <dt>Raw policy</dt>
-                <dd>MCTS 검색 전 신경망이 각 착수에 부여한 확률입니다. API의 rawPrior 값이며 화면에는 합법 수를 우선 표시합니다.</dd>
+                <dd>MCTS 검색 전 신경망이 각 착수에 부여한 확률입니다. 화면 순위에는 현재 위치의 합법 수만 사용합니다.</dd>
               </div>
               <div>
                 <dt>Visits</dt>
@@ -379,7 +383,15 @@
               </div>
               <div>
                 <dt>Winrate (Black)</dt>
-                <dd>흑이 이길 것으로 보는 확률입니다. KataGomo의 원시 Winrate 관점은 항상 BLACK입니다.</dd>
+                <dd>현재 검색에서 흑이 이길 것으로 추정한 확률입니다. KataGomo의 원시 Winrate 관점은 항상 BLACK이며 절대적인 승패 보장은 아닙니다.</dd>
+              </div>
+              <div>
+                <dt>Winrate (Current player)</dt>
+                <dd>Winrate (Black)를 지금 둘 차례의 색 관점으로 변환한 값입니다. 백 차례에는 1 − Winrate (Black)입니다.</dd>
+              </div>
+              <div>
+                <dt>Winrate (User)</dt>
+                <dd>AI와 연습할 때 선택한 사용자 색 관점으로 변환한 값입니다. 양쪽 직접 두기 모드에서는 표시하지 않습니다.</dd>
               </div>
               <div>
                 <dt>PV</dt>
@@ -390,8 +402,20 @@
                 <dd>KataGomo가 반환한 후보 순서입니다. Order 0이 최우선 후보입니다.</dd>
               </div>
               <div>
+                <dt>Raw policy rank</dt>
+                <dd>합법 수를 Raw policy가 큰 순서로 정렬한 순위입니다. MCTS를 거치기 전 신경망 선호를 비교합니다.</dd>
+              </div>
+              <div>
+                <dt>Visits rank</dt>
+                <dd>반환된 MCTS 후보를 Visits가 많은 순서로 본 순위입니다. Raw policy rank와 다를 수 있습니다.</dd>
+              </div>
+              <div>
+                <dt>100 / 500 visits</dt>
+                <dd>한 위치에서 요청할 최대 MCTS 검색량입니다. 100은 빠른 반복용, 500은 더 오래 탐색해 후보 비교를 안정시키는 용도입니다.</dd>
+              </div>
+              <div>
                 <dt>분석 부족</dt>
-                <dd>Visits가 기준보다 적어 결과를 확정적으로 평가하지 않는 상태입니다.</dd>
+                <dd>실제 확보된 Visits가 채점 기준보다 적어 결과를 확정적으로 평가하지 않는 상태입니다. 수치는 숨기지 않고 그대로 표시합니다.</dd>
               </div>
             </dl>
           </details>

@@ -1,8 +1,13 @@
+import platform
+import sys
 import time
 from dataclasses import replace
 
+import pytest
 from fastapi.testclient import TestClient
+from starlette.websockets import WebSocketDisconnect
 
+import server.app as app_module
 from server.app import create_app
 from server.config import PROJECT_ROOT
 
@@ -40,12 +45,34 @@ def wait_for_analysis_session(
     raise AssertionError(f"analysisSessionOccupied did not become {occupied}")
 
 
-def test_fastapi_websocket_stream_on_python_314(fake_settings):
+def test_lifespan_stops_engine_when_startup_fails(fake_settings, monkeypatch):
+    stopped = False
+
+    class FailingStartupEngine:
+        def __init__(self, _settings):
+            pass
+
+        async def start(self):
+            raise RuntimeError("synthetic startup failure")
+
+        async def stop(self):
+            nonlocal stopped
+            stopped = True
+
+    monkeypatch.setattr(app_module, "KataGomoEngine", FailingStartupEngine)
+    with pytest.raises(RuntimeError, match="synthetic startup failure"):
+        with TestClient(app_module.create_app(fake_settings)):
+            pass
+    assert stopped is True
+
+
+def test_fastapi_websocket_stream_on_supported_python(fake_settings):
     with TestClient(create_app(fake_settings)) as client:
         status = client.get("/api/status")
         assert status.status_code == 200
         assert status.json()["engine"]["state"] == "ready"
-        assert status.json()["python"]["version"] == "3.14.6"
+        assert sys.version_info >= (3, 11)
+        assert status.json()["python"]["version"] == platform.python_version()
 
         with client.websocket_connect("/ws/analysis") as websocket:
             assert websocket.receive_json()["status"] == "connected"
@@ -87,6 +114,108 @@ def test_local_ui_assets_disable_browser_cache(fake_settings):
         assert script.status_code == 200
         assert index.headers["cache-control"] == "no-store"
         assert script.headers["cache-control"] == "no-store"
+
+
+def test_http_accepts_only_exact_loopback_hosts_and_dynamic_ports(fake_settings):
+    allowed_hosts = [
+        "localhost",
+        "localhost:43123",
+        "127.0.0.1:51234",
+        "[::1]:62000",
+    ]
+    with TestClient(create_app(fake_settings)) as client:
+        for host in allowed_hosts:
+            response = client.get("/api/status", headers={"host": host})
+            assert response.status_code == 200, host
+
+
+def test_http_rejects_dns_rebinding_and_malformed_hosts(fake_settings):
+    hostile_hosts = [
+        "attacker.example",
+        "localhost.attacker.example",
+        "127.0.0.1.attacker.example",
+        "localhost@attacker.example",
+        "localhost:0",
+        "localhost:65536",
+    ]
+    with TestClient(create_app(fake_settings)) as client:
+        for host in hostile_hosts:
+            response = client.get("/api/status", headers={"host": host})
+            assert response.status_code == 400, host
+            assert response.text == "Invalid host header"
+
+
+def test_testserver_host_is_limited_to_starlette_in_memory_peer(fake_settings):
+    with TestClient(create_app(fake_settings)) as in_memory_client:
+        assert in_memory_client.get("/api/status").status_code == 200
+
+    with TestClient(
+        create_app(fake_settings), client=("203.0.113.10", 43123)
+    ) as non_test_peer:
+        response = non_test_peer.get(
+            "/api/status", headers={"host": "testserver"}
+        )
+        assert response.status_code == 400
+
+
+def test_websocket_allows_originless_loopback_cli_client(fake_settings):
+    with TestClient(create_app(fake_settings)) as client:
+        with client.websocket_connect(
+            "/ws/analysis", headers={"host": "127.0.0.1:51234"}
+        ) as websocket:
+            assert websocket.receive_json()["status"] == "connected"
+
+
+@pytest.mark.parametrize(
+    ("host", "origin"),
+    [
+        ("localhost:43123", "http://localhost:43123"),
+        ("127.0.0.1:51234", "http://127.0.0.1:51234"),
+        ("[::1]:62000", "http://[::1]:62000"),
+    ],
+)
+def test_websocket_accepts_same_loopback_origin_with_dynamic_port(
+    fake_settings, host, origin
+):
+    with TestClient(create_app(fake_settings)) as client:
+        with client.websocket_connect(
+            "/ws/analysis", headers={"host": host, "origin": origin}
+        ) as websocket:
+            assert websocket.receive_json()["status"] == "connected"
+
+
+@pytest.mark.parametrize(
+    "origin",
+    [
+        "https://attacker.example",
+        "http://localhost.attacker.example:43123",
+        "http://127.0.0.1:43123",
+        "http://localhost:43124",
+        "https://localhost:43123",
+        "null",
+    ],
+)
+def test_websocket_rejects_hostile_cross_host_and_cross_port_origins(
+    fake_settings, origin
+):
+    with TestClient(create_app(fake_settings)) as client:
+        with pytest.raises(WebSocketDisconnect) as rejected:
+            with client.websocket_connect(
+                "/ws/analysis",
+                headers={"host": "localhost:43123", "origin": origin},
+            ):
+                pass
+        assert rejected.value.code == 1008
+
+
+def test_websocket_rejects_hostile_host_even_without_origin(fake_settings):
+    with TestClient(create_app(fake_settings)) as client:
+        with pytest.raises(WebSocketDisconnect) as rejected:
+            with client.websocket_connect(
+                "/ws/analysis", headers={"host": "localhost.attacker.example"}
+            ):
+                pass
+        assert rejected.value.code == 1008
 
 
 def test_position_endpoint_uses_official_board_history(fake_settings):

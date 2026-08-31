@@ -21,6 +21,12 @@ The model is not part of this Git repository. `make model` downloads
 stores it only in the ignored local `models/` directory. See
 `models/MANIFEST.json` for the source URL and integrity metadata. Users remain
 responsible for following the upstream release terms when using the model.
+The referenced release page describes the model asset but does not state a
+separate license for the neural-network weights. The engine reports its model
+name as `zhizigo_renju28b-b28c512nbt-s1617930240-d2051476833`; the source of
+the downloaded file is the `hzyhhzy/KataGomo` release linked above. This
+project therefore does not redistribute or bundle that asset and does not
+grant any additional right to use or redistribute it.
 
 ## Python and JavaScript dependencies
 

@@ -91,6 +91,11 @@ for line in sys.stdin:
             malformed["policy"] = []
             emit(malformed)
             continue
+        if request.get("maxVisits") == 8:
+            malformed = analysis_response(request, during=False)
+            malformed["moveInfos"][0]["visits"] = "not-an-integer"
+            emit(malformed)
+            continue
         pending[request["id"]] = request
         emit(analysis_response(request, during=True))
         if request.get("maxVisits") == 42:

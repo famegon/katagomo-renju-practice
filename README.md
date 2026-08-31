@@ -2,7 +2,9 @@
 
 > 로컬 15×15 Renju 연습 플랫폼
 
-KataGomo Renju Practice는 공식 [KataGomo](https://github.com/hzyhhzy/KataGomo) 엔진과 공개 Renju 신경망을 그대로 사용해, Mac에서 혼자 수를 놓고 실시간 분석을 확인하는 데스크톱 웹 앱이다. 별도 계정이나 클라우드 서버 없이 `127.0.0.1`에서 실행된다.
+KataGomo Renju Practice는 공식 [KataGomo](https://github.com/hzyhhzy/KataGomo) 엔진과 공식 릴리스에서 다운로드되는 Renju 신경망을 그대로 사용해, Mac에서 혼자 수를 놓고 실시간 분석을 확인하는 데스크톱 웹 앱이다. 별도 계정이나 클라우드 서버 없이 `127.0.0.1`에서 실행된다.
+
+신경망 가중치는 공개 다운로드되지만 릴리스 페이지에 별도 라이선스가 명시되어 있지 않다. 이 저장소는 모델을 포함하거나 재배포하지 않고 사용자의 Mac에서 원본 자산을 직접 받으며, 모델에 대한 사용·재배포 권리를 별도로 부여하지 않는다. 자세한 범위는 [Third-party notices](THIRD_PARTY_NOTICES.md)를 확인한다.
 
 이 프로젝트의 범위는 명확하다.
 
@@ -23,7 +25,7 @@ KataGomo Renju Practice는 공식 [KataGomo](https://github.com/hzyhhzy/KataGomo
 - **반복 연습:** 6, 8, 10, 12, 14, 16수 종료 또는 제한 없이 진행할 수 있다. 실제 종국은 선택한 수 제한보다 항상 우선한다.
 - **기록과 복기:** 수별 추천 수, policy/visit 순위, 승률 변화와 큰 실수를 확인하고 읽기 전용 복기판에서 다시 살펴본다.
 
-완료한 연습은 현재 브라우저의 `localStorage` 키 `katagomo.renjuPractice.v2`에 최신 20판까지 저장된다. 각 사용자 수 직전 최종 분석의 Order 기준 상위 10개 후보와 PV만 compact snapshot으로 보존하고, 226개 전체 policy 배열은 반복 저장하지 않는다. 기존 `katagomo.openingPractice.v1` 기록은 자동 변환하며 v2 저장소 자체가 손상된 경우에도 v1을 복구 후보로 사용하고 진단을 화면에 남긴다. 기록별 삭제와 전체 삭제가 가능하다.
+완료한 연습은 현재 브라우저의 `localStorage` 키 `katagomo.renjuPractice.v2`에 최신 20판까지 저장된다. 각 사용자 수 직전 최종 분석의 Order 기준 상위 10개 후보와 PV만 축약해 보존하고, 226개 전체 policy 배열은 반복 저장하지 않는다. 기존 `katagomo.openingPractice.v1` 기록은 자동 변환하며 v2 저장소 자체가 손상된 경우에도 v1을 복구 후보로 사용하고 진단을 화면에 남긴다. 기록별 삭제와 전체 삭제가 가능하다.
 
 복기판에서는 처음·이전·다음·마지막 수로 이동하고 당시 수별 평가, 후보, PV와 큰 실수 위치를 확인한다. 복기만 하는 동안 라이브 보드는 바뀌지 않으며, 사용자가 명시적으로 **이 위치에서 연습**을 누른 비종국 위치만 새 연습 시작점으로 복사한다. 기록은 다른 브라우저·프로필과 자동 동기화되지 않으며 사이트 데이터를 지우면 함께 삭제된다.
 
@@ -53,6 +55,14 @@ brew --version
 
 GitHub에서 저장소를 clone한 뒤 프로젝트 루트에서 실행한다. 첫 명령은 Homebrew로 `cmake`, `eigen`, `jq`를 설치하고 Python 패키지를 `.venv`에 설치한다. 모델 다운로드는 269,873,929 bytes(약 257 MiB)다.
 
+처음부터 전체 CPU/Eigen 환경을 준비하고 실제 smoke까지 확인하려면 다음 한 명령을 사용할 수 있다.
+
+```bash
+make bootstrap
+```
+
+각 단계를 따로 확인하거나 실패 지점을 분리하려면 아래 명령을 순서대로 실행한다.
+
 ```bash
 make setup
 make engine
@@ -79,6 +89,8 @@ make dev
 
 브라우저에서 [http://127.0.0.1:8000](http://127.0.0.1:8000)을 연다. `localhost` 대신 위 주소를 그대로 사용하는 편이 명확하다.
 
+이 앱에는 로그인이나 사용자 인증이 없고 loopback 바인딩이 주 접근 통제다. 지원 실행 명령은 exact loopback Host와 같은 origin의 브라우저 WebSocket만 허용하지만, 같은 Mac의 로컬 프로세스는 origin 없이 연결할 수 있다. `make dev`의 `127.0.0.1` 바인딩을 LAN 주소로 바꾸거나 reverse proxy로 외부에 공개하는 사용법은 지원하지 않는다.
+
 연습 기록은 브라우저 origin별로 저장된다. 따라서 `127.0.0.1:8000`과 `127.0.0.1:8001`, 또는 `localhost:8000`은 서로 다른 기록 저장소로 보인다. 기존 기록을 계속 보려면 같은 주소와 포트를 사용한다.
 
 종료할 때는 `make dev`를 실행한 터미널에서 `Ctrl-C`를 누른다. FastAPI 서버가 끝날 때 persistent KataGomo analysis 프로세스에도 종료를 전달한다.
@@ -94,7 +106,7 @@ make dev
 - 기본 분석량은 100 visits이며 더 깊은 확인에는 500 visits를 선택할 수 있다.
 - 후보 수와 원 크기 기준을 바꾸어 Raw policy와 Visit share를 따로 비교할 수 있다.
 - 후보를 가리키거나 선택하면 PV 예상 수순을 보드에서 확인할 수 있다.
-- 흑 금수는 표시되고 클릭이 차단된다. helper가 실패하면 임의 판정 대신 안전하게 착수와 분석을 막는다.
+- 흑 금수는 표시되고 클릭이 차단된다. KataGomo 금수 판정이 실패하면 임의 판정 대신 안전하게 착수와 분석을 막는다.
 - 수 제한에 도달하거나 공식 종국이 되면 결과와 수별 평가를 정리한다.
 
 ## 분석 용어
@@ -206,7 +218,9 @@ make test
 make integration-test
 ```
 
-`make test`는 JavaScript 상태/기록 규칙과 Python 단위·프로세스·API/WebSocket 테스트를 실행한다. `make integration-test`는 mock이 아닌 CPU/Eigen KataGomo 엔진과 공식 모델로 실제 분석을 수행한다.
+`make test`는 JavaScript 문법·상태·기록 규칙과 Python 단위·프로세스·API/WebSocket 테스트를 실행한다. `make integration-test`는 mock이 아닌 CPU/Eigen KataGomo 엔진과 공식 모델로 실제 분석을 수행한다.
+
+GitHub Actions의 일반 CI는 macOS와 Python 3.11/3.14에서 웹·Python·공식 helper 테스트를 실행한다. 257 MiB 모델 다운로드와 전체 CPU 엔진 빌드가 필요한 실엔진 통합 테스트는 Actions 화면에서 수동으로 실행한다.
 
 추가 진단 명령:
 
@@ -218,11 +232,13 @@ make dev                  # 별도 터미널에서 유지
 make websocket-smoke
 ```
 
-> 최종 회귀 기록(2026-09-01): 웹 상태·저장·DOM 테스트 50 passed, Python 테스트 97 passed / 1 deselected, 실제 CPU/Eigen 엔진·공식 모델 통합 테스트 1 passed / 97 deselected.
+> 최종 회귀 기록(2026-09-01): JavaScript 문법 검사와 웹 상태·저장·DOM 테스트 61 passed, Python 테스트 186 passed / 1 deselected, 실제 CPU/Eigen 엔진·공식 모델 통합 테스트 1 passed / 186 deselected.
 
 ## 배포 파일과 라이선스
 
 이 저장소의 로컬 서버, UI, build adapter와 테스트는 [MIT License](LICENSE)로 배포한다. 외부 구성요소와 모델 출처는 [Third-party notices](THIRD_PARTY_NOTICES.md)를 확인한다.
+
+보안 문제와 로컬 전용 신뢰 경계는 [Security policy](SECURITY.md)를 확인한다.
 
 다음 파일은 Git에 커밋하거나 이 프로젝트의 산출물로 재배포하지 않는다.
 
@@ -232,9 +248,12 @@ make websocket-smoke
 - `artifacts/`, `logs/`, `*.log` 실행·분석 로그
 - `.venv/`, `node_modules/` 로컬 의존성
 
-`make engine`과 `make model`이 사용자의 컴퓨터에서 공식 소스와 공식 릴리스 자산을 직접 가져온다. 모델의 URL과 무결성 메타데이터만 `models/MANIFEST.json`에 추적한다. KataGomo, KataGo와 모델 저자는 이 UI와 제휴하거나 이를 보증하지 않는다.
+`make engine`과 `make model`이 사용자의 컴퓨터에서 공식 소스와 공식 릴리스 자산을 직접 가져온다. 모델의 URL과 무결성 메타데이터만 `models/MANIFEST.json`에 추적한다. 가중치에는 별도 라이선스가 명시되지 않았으며 이 프로젝트는 모델에 대한 권리를 부여하지 않는다. KataGomo, KataGo와 모델 저자는 이 UI와 제휴하거나 이를 보증하지 않는다.
 
 ---
+
+<details>
+<summary><strong>검증 및 기술 세부사항 펼치기</strong></summary>
 
 ## 검증 및 기술 세부사항
 
@@ -540,11 +559,13 @@ Order는 Visits 순위와 다를 수 있다. 보존된 CPU 비교에서 `G9`는 
 - 별도 CPU/Eigen, 외부 동일 모델, `KATAGOMO_PORT=8011` 실행에서는 중간 44개, 최종 1개, policy 226개, 후보 17개를 받고 `All cleaned up, quitting` 종료 로그까지 확인했다.
 - 이전 UI 체크포인트의 실제 브라우저에서 14수 흑 연습, AI 7수 자동 착수, 사용자 7수 평가, 결과표, 완료 후 착수 차단, 당시 localStorage 저장·복원과 백 연습의 AI 선착수를 확인했다. 모든 사용자 수가 실제 서버 평가를 받았고 당시 console error는 없었다.
 - 같은 이전 체크포인트에서 14수 판을 제한 없음으로 이어 16수까지 실제 분석·AI 응수 후 직접 종료했고, 기존 14수와 새 16수 기록이 각각 보존됨을 확인했다.
-- 같은 이전 체크포인트에서 금수 3×3 fixture의 M5 표시와 클릭 차단을 실제 브라우저로 확인했다. 현재 v2 복기 UI는 순수 상태·저장·DOM 계약 테스트와 실제 HTTP/WebSocket으로 검증했으며 Chrome 제어 서비스가 연결되지 않아 최종 시각 E2E는 별도로 남아 있다.
+- 같은 이전 체크포인트에서 금수 3×3 fixture의 M5 표시와 클릭 차단을 실제 브라우저로 확인했다.
+- 2026-09-01 릴리스 후보는 Chrome에서 1180×800과 1440×900 데스크톱 레이아웃을 시각 점검했다. 실제 빈 보드 100 visits는 검색 중간 응답 뒤 Root visits 107로 끝났고, 양쪽 직접 두기에서 H8을 놓은 500 visits는 중간 응답 뒤 Root visits 507로 끝났다. 후자의 Winrate (Black) 97.0%가 백 차례 관점 3.0%로 변환됐으며 사용자 색/AI 자동 착수는 비활성화됐다. 후보 표 선택·PV, Raw policy 순위, 용어 설명 열기와 console error 0건도 확인했다.
+- 같은 실행 서버의 500-visits WebSocket smoke는 중간 44개, 최종 1개, policy 226개, 후보 17개를 받았다. 실제 HTTP에서는 정상 loopback Host 200, 악성 Host 400, 악성 WebSocket Origin 403, 정적 자산 `Cache-Control: no-store`를 확인했다.
 
 주요 생성 원문은 `artifacts/stage1/analysis-response.jsonl`, `artifacts/stage2/integration-response.jsonl`, `artifacts/stage2/candidate-distribution/`, `artifacts/stage3/websocket-response.jsonl`, `artifacts/stage3/integration-training-response.jsonl`에 저장한다. 모두 재생성 가능한 로컬 산출물이므로 Git에서는 제외한다.
 
-중간 응답 수와 visits 분배는 실행 스케줄링에 따라 달라진다. 브라우저 E2E 전용 자동 러너는 아직 없으며 상태/저장 로직 단위 테스트, Python API/통합 테스트와 수동 브라우저 검증을 함께 유지한다.
+중간 응답 수와 visits 분배는 실행 스케줄링에 따라 달라진다. 브라우저 E2E 전용 자동 러너는 아직 없으며 상태/저장/상호작용 로직 단위 테스트, Python API/통합 테스트와 실제 Chrome 검증을 함께 유지한다.
 
 ### 체크포인트
 
@@ -554,6 +575,7 @@ Order는 Visits 순위와 다를 수 있다. 보존된 CPU 비교에서 `G9`는 
 | `4786773` | Stage 2 persistent 분석 서버 |
 | `8bf988b` | 반복 연습 UI와 채점 |
 | `d8e617d` | 실행 재현성 검증 |
+| `1cd61a8` | 데스크톱 Renju 연습 플랫폼 |
 
 각 체크포인트는 모델, 빌드 산출물, 로그, `.venv`, `vendor/`를 포함하지 않는다. 공식 KataGomo checkout은 지정 커밋에서 clean 상태로 유지했다.
 
@@ -586,3 +608,5 @@ build/engine-eigen/             CPU/Eigen 실행 파일, Git 제외
 build/engine-opencl/            opt-in OpenCL 실행 파일, Git 제외
 models/*.bin.gz                 모델 본체, Git 제외
 ```
+
+</details>

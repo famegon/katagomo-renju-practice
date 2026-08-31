@@ -1,5 +1,9 @@
 const MODES = new Set(["practice", "analysis"]);
 const LEGALITY_STATES = new Set(["pending", "ready", "error"]);
+const ENGINE_STATES = new Set([
+  "unknown", "starting", "ready", "analyzing", "restarting", "stopping", "stopped", "error",
+]);
+const TRAINING_CONTRACT_STATES = new Set(["pending", "ready", "error"]);
 const ANALYSIS_STATES = new Set([
   "requested",
   "streaming",
@@ -20,7 +24,7 @@ const BUSY_PRACTICE_PHASES = new Set([
   "finishing",
 ]);
 
-export const VIEW_STATE_VERSION = 1;
+export const VIEW_STATE_VERSION = 2;
 export const PRIMARY_ACTION_IDS = Object.freeze([
   "practice-start",
   "analyze",
@@ -30,6 +34,8 @@ export const PRIMARY_ACTION_IDS = Object.freeze([
   "new-opening",
   "reset",
   "review-start-practice",
+  "retry-legality",
+  "retry-training",
 ]);
 
 function fail(message) {
@@ -66,6 +72,16 @@ function normalizeInput(input) {
   const legalityState = input.legalityState ?? "pending";
   if (!LEGALITY_STATES.has(legalityState)) {
     fail("legalityState는 pending, ready 또는 error여야 합니다");
+  }
+
+  const engineState = input.engineState ?? "unknown";
+  if (!ENGINE_STATES.has(engineState)) {
+    fail("engineState가 잘못되었습니다");
+  }
+
+  const trainingContractState = input.trainingContractState ?? "pending";
+  if (!TRAINING_CONTRACT_STATES.has(trainingContractState)) {
+    fail("trainingContractState는 pending, ready 또는 error여야 합니다");
   }
 
   const rawPosition = input.positionState ?? null;
@@ -117,10 +133,8 @@ function normalizeInput(input) {
   return {
     mode,
     connected: requireBoolean(input.connected ?? false, "connected"),
-    trainingContractReady: requireBoolean(
-      input.trainingContractReady ?? false,
-      "trainingContractReady",
-    ),
+    engineState,
+    trainingContractState,
     legalityState,
     positionState: rawPosition,
     practice,
@@ -165,7 +179,7 @@ function terminalPresentation(positionState) {
     visible: true,
     outcome: positionState.outcome ?? null,
     title,
-    message: `${moveContext}${result} 공식 KataGomo BoardHistory 판정이며 종국 위치는 MCTS 분석하지 않습니다.`,
+    message: `${moveContext}${result} KataGomo의 공식 Renju 종국 판정이며 종국 위치는 MCTS 분석하지 않습니다.`,
   };
 }
 
@@ -182,7 +196,8 @@ function boardIsInteractive(state) {
     || state.legalityState !== "ready" || isAnalysisLive(state.analysis)
     || state.practice.summaryPending || state.practice.ended) return false;
   if (!state.practice.active) return true;
-  return state.connected && state.practice.phase === "user_turn";
+  return state.connected && state.engineState === "ready"
+    && state.practice.phase === "user_turn";
 }
 
 function baseActions(state, boardInteractive) {
@@ -190,7 +205,8 @@ function baseActions(state, boardInteractive) {
   const live = isAnalysisLive(state.analysis);
   const busyPractice = state.practice.active && practiceIsBusy(state.practice);
   const completed = state.practice.ended && !state.practice.summaryPending;
-  const canUseTraining = state.connected && state.trainingContractReady;
+  const canStartAnalysis = state.connected && state.engineState === "ready";
+  const canUseTraining = canStartAnalysis && state.trainingContractState === "ready";
 
   return {
     "practice-start": {
@@ -200,7 +216,7 @@ function baseActions(state, boardInteractive) {
     },
     analyze: {
       visible: !state.reviewActive && !terminal && !state.practice.ended,
-      enabled: state.connected && state.legalityState === "ready" && !live && !busyPractice,
+      enabled: canStartAnalysis && state.legalityState === "ready" && !live && !busyPractice,
     },
     cancel: {
       visible: live && !terminal && !state.reviewActive,
@@ -221,6 +237,15 @@ function baseActions(state, boardInteractive) {
     "review-start-practice": {
       visible: state.reviewActive,
       enabled: state.reviewActive && state.reviewCanStartPractice && canUseTraining,
+    },
+    "retry-legality": {
+      visible: state.legalityState === "error" && !state.reviewActive && !terminal,
+      enabled: state.connected && state.legalityState === "error" && !live,
+    },
+    "retry-training": {
+      visible: state.mode === "practice" && state.trainingContractState === "error"
+        && !state.practice.active && !state.reviewActive && !terminal,
+      enabled: state.connected && state.trainingContractState === "error" && !live,
     },
   };
 }
@@ -268,7 +293,8 @@ function selectState(state, terminal, boardInteractive, actions) {
       "legality-error",
       "error",
       "공식 금수 판정을 불러오지 못했습니다.",
-      "안전을 위해 착수를 차단했습니다. helper 상태를 확인한 뒤 다시 시도하세요.",
+      "안전을 위해 착수를 차단했습니다. 공식 금수 판정을 다시 시도하세요.",
+      "retry-legality",
     );
   }
   if (state.legalityState === "pending") {
@@ -276,7 +302,7 @@ function selectState(state, terminal, boardInteractive, actions) {
       "legality-pending",
       "busy",
       "공식 금수 정보를 확인하고 있습니다.",
-      "KataGomo Board::isForbidden() 결과가 도착하면 착수할 수 있습니다.",
+      "KataGomo의 금수 판정 결과가 도착하면 착수할 수 있습니다.",
     );
   }
   if (state.practice.summaryPending) {
@@ -306,6 +332,24 @@ function selectState(state, terminal, boardInteractive, actions) {
       state.practice.active ? "KataGomo가 다음 단계를 분석하고 있습니다." : "KataGomo가 현재 위치를 분석하고 있습니다.",
       "검색 중간 결과가 들어올 때마다 Raw policy, Visits, Winrate와 PV를 갱신합니다.",
       "cancel",
+    );
+  }
+  if (["unknown", "starting", "restarting", "stopping", "analyzing"].includes(state.engineState)) {
+    return result(
+      "engine-pending",
+      "busy",
+      "KataGomo 엔진을 준비하고 있습니다.",
+      state.practice.active
+        ? "엔진이 준비될 때까지 연습 착수를 기다려 주세요."
+        : "보드는 편집할 수 있으며, 엔진이 준비되면 분석을 시작할 수 있습니다.",
+    );
+  }
+  if (["stopped", "error"].includes(state.engineState)) {
+    return result(
+      "engine-unavailable",
+      "error",
+      "KataGomo 엔진을 사용할 수 없습니다.",
+      "엔진 진단에서 오류와 자동 재시작 상태를 확인하세요. 보드 편집 내용은 유지됩니다.",
     );
   }
   if (state.practice.active) {
@@ -377,7 +421,16 @@ function selectState(state, terminal, boardInteractive, actions) {
       "analyze",
     );
   }
-  if (!state.trainingContractReady) {
+  if (state.trainingContractState === "error") {
+    return result(
+      "practice-contract-error",
+      "error",
+      "연습 설정을 불러오지 못했습니다.",
+      "현재 위치 분석은 가능하며, AI 연습 설정만 다시 확인할 수 있습니다.",
+      "retry-training",
+    );
+  }
+  if (state.trainingContractState === "pending") {
     return result(
       "practice-contract-pending",
       "busy",

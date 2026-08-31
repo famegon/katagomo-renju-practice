@@ -3,17 +3,20 @@ from __future__ import annotations
 import asyncio
 import math
 import platform
+import re
 import uuid
 from collections.abc import Mapping, Sequence
 from contextlib import asynccontextmanager, suppress
 from pathlib import Path
 from typing import Any
+from urllib.parse import urlsplit
 
 from fastapi import FastAPI, HTTPException, Request, WebSocket, WebSocketDisconnect
 from fastapi.exceptions import RequestValidationError
-from fastapi.responses import FileResponse, JSONResponse
+from fastapi.responses import FileResponse, JSONResponse, PlainTextResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import ValidationError
+from starlette.types import ASGIApp, Receive, Scope, Send
 
 from .config import PROJECT_ROOT, Settings
 from .engine import EngineUnavailableError, KataGomoEngine
@@ -36,6 +39,165 @@ from .training import (
     evaluate_training_move,
     summarize_top_mistakes,
 )
+
+
+_NAMED_LOOPBACK_AUTHORITY = re.compile(
+    r"(?P<host>localhost|127\.0\.0\.1)(?::(?P<port>[0-9]{1,5}))?",
+    re.IGNORECASE,
+)
+_IPV6_LOOPBACK_AUTHORITY = re.compile(
+    r"\[::1\](?::(?P<port>[0-9]{1,5}))?",
+    re.IGNORECASE,
+)
+_TESTSERVER_AUTHORITY = re.compile(
+    r"testserver(?::(?P<port>[0-9]{1,5}))?",
+    re.IGNORECASE,
+)
+
+
+def _parse_local_authority(
+    value: str, *, allow_testserver: bool
+) -> tuple[str, int | None] | None:
+    """Parse an exact loopback HTTP authority without DNS resolution.
+
+    Matching the small allowlist directly is intentional: suffixes such as
+    ``localhost.attacker.example`` and user-info tricks must never inherit the
+    trust assigned to localhost. ``testserver`` is reserved for Starlette's
+    in-memory TestClient and is enabled only after checking the ASGI peer.
+    """
+
+    match = _NAMED_LOOPBACK_AUTHORITY.fullmatch(value)
+    if match is not None:
+        host = match.group("host").lower()
+    else:
+        match = _IPV6_LOOPBACK_AUTHORITY.fullmatch(value)
+        if match is not None:
+            host = "::1"
+        elif allow_testserver:
+            match = _TESTSERVER_AUTHORITY.fullmatch(value)
+            if match is None:
+                return None
+            host = "testserver"
+        else:
+            return None
+
+    raw_port = match.group("port")
+    if raw_port is None:
+        return host, None
+    port = int(raw_port)
+    if not 1 <= port <= 65535:
+        return None
+    return host, port
+
+
+def _header_values(scope: Scope, name: bytes) -> list[str]:
+    return [
+        value.decode("latin-1")
+        for key, value in scope.get("headers", [])
+        if key.lower() == name
+    ]
+
+
+def _is_starlette_test_client(scope: Scope) -> bool:
+    peer = scope.get("client")
+    return bool(peer and peer[0] == "testclient")
+
+
+def _websocket_origin_matches(
+    scope: Scope,
+    origin: str,
+    request_authority: tuple[str, int | None],
+    *,
+    allow_testserver: bool,
+) -> bool:
+    try:
+        parsed = urlsplit(origin)
+    except ValueError:
+        return False
+
+    websocket_scheme = str(scope.get("scheme", "ws")).lower()
+    expected_origin_scheme = "https" if websocket_scheme == "wss" else "http"
+    if (
+        parsed.scheme.lower() != expected_origin_scheme
+        or not parsed.netloc
+        or parsed.path
+        or parsed.query
+        or parsed.fragment
+    ):
+        return False
+
+    origin_authority = _parse_local_authority(
+        parsed.netloc, allow_testserver=allow_testserver
+    )
+    if origin_authority is None:
+        return False
+
+    request_host, request_port = request_authority
+    origin_host, origin_port = origin_authority
+    default_port = 443 if expected_origin_scheme == "https" else 80
+    return request_host == origin_host and (request_port or default_port) == (
+        origin_port or default_port
+    )
+
+
+class _LocalhostBoundaryMiddleware:
+    """Keep the unauthenticated application on an exact loopback boundary."""
+
+    def __init__(self, app: ASGIApp) -> None:
+        self.app = app
+
+    async def __call__(
+        self, scope: Scope, receive: Receive, send: Send
+    ) -> None:
+        if scope["type"] not in {"http", "websocket"}:
+            await self.app(scope, receive, send)
+            return
+
+        host_values = _header_values(scope, b"host")
+        allow_testserver = _is_starlette_test_client(scope)
+        authority = (
+            _parse_local_authority(
+                host_values[0], allow_testserver=allow_testserver
+            )
+            if len(host_values) == 1
+            else None
+        )
+        if authority is None:
+            if scope["type"] == "websocket":
+                await send(
+                    {
+                        "type": "websocket.close",
+                        "code": 1008,
+                        "reason": "Invalid host header",
+                    }
+                )
+            else:
+                response = PlainTextResponse("Invalid host header", status_code=400)
+                await response(scope, receive, send)
+            return
+
+        if scope["type"] == "websocket":
+            origin_values = _header_values(scope, b"origin")
+            origin_is_valid = not origin_values or (
+                len(origin_values) == 1
+                and _websocket_origin_matches(
+                    scope,
+                    origin_values[0],
+                    authority,
+                    allow_testserver=allow_testserver,
+                )
+            )
+            if not origin_is_valid:
+                await send(
+                    {
+                        "type": "websocket.close",
+                        "code": 1008,
+                        "reason": "Invalid WebSocket origin",
+                    }
+                )
+                return
+
+        await self.app(scope, receive, send)
 
 
 def _json_safe(value: Any) -> Any:
@@ -121,8 +283,8 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         app.state.engine = engine
         app.state.forbidden_helper = helper
         app.state.sessions = sessions
-        await engine.start()
         try:
+            await engine.start()
             yield
         finally:
             await engine.stop()
@@ -139,6 +301,10 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             # Safari from keeping an older app.js/index.html across restarts.
             response.headers["Cache-Control"] = "no-store"
         return response
+
+    # Add this after the function-based middleware so it becomes the outermost
+    # application boundary in Starlette's middleware stack.
+    app.add_middleware(_LocalhostBoundaryMiddleware)
 
     @app.exception_handler(RequestValidationError)
     async def request_validation_error_handler(

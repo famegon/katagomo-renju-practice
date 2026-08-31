@@ -9,14 +9,6 @@ function matches(pattern, source) {
   return [...source.matchAll(pattern)].map((match) => match[1]);
 }
 
-function sourceSection(start, end) {
-  const startIndex = app.indexOf(start);
-  const endIndex = app.indexOf(end, startIndex + start.length);
-  assert.notEqual(startIndex, -1, `missing source marker: ${start}`);
-  assert.notEqual(endIndex, -1, `missing source marker: ${end}`);
-  return app.slice(startIndex, endIndex);
-}
-
 test("desktop document IDs are unique and every app lookup has a matching element", () => {
   const ids = matches(/\bid=["']([^"']+)["']/g, html);
   const counts = new Map();
@@ -54,6 +46,11 @@ test("candidate table and glossary preserve standard KataGomo terminology", () =
   assert.match(html, /<tbody id="candidates">[\s\S]*?colspan="7"/);
   assert.match(html, /KataGomo의 원시 Winrate 관점은 항상 BLACK/);
   assert.match(html, /<dt>Root visits<\/dt>/);
+  assert.match(html, /<dt>Winrate \(Current player\)<\/dt>/);
+  assert.match(html, /<dt>Winrate \(User\)<\/dt>/);
+  assert.match(html, /<dt>Raw policy rank<\/dt>/);
+  assert.match(html, /<dt>Visits rank<\/dt>/);
+  assert.match(html, /<dt>100 \/ 500 visits<\/dt>/);
   assert.match(app, /data-order="\$\{order \?\? ""\}"/);
   assert.match(app, /aria-selected="\$\{selected\}"/);
   assert.match(app, /const first = order === 0/);
@@ -72,6 +69,8 @@ test("the DOM is wired to the pure view state and exposes official terminal stat
   assert.match(html, /id="terminal-banner"[^>]*role="alert"/);
   assert.match(html, /id="task-title"/);
   assert.match(html, /id="task-message"/);
+  assert.match(html, /id="retry-legality"/);
+  assert.match(html, /id="retry-training"/);
 });
 
 test("engine process details stay in collapsed diagnostics rather than the header badge", () => {
@@ -84,59 +83,23 @@ test("engine process details stay in collapsed diagnostics rather than the heade
   assert.match(app, /ready: "엔진 준비됨"/);
 });
 
-test("only an identity-matched WebSocket error can fail the live AnalysisJob", () => {
-  const matcher = sourceSection(
-    "function analysisErrorTargetsLiveJob",
-    "function selectedEndCondition",
-  );
-  assert.match(matcher, /analysisIsLive\(\)/);
-  assert.match(matcher, /typeof message\?\.clientRequestId === "string"/);
-  assert.match(matcher, /message\.clientRequestId === analysisJob\.clientRequestId/);
-
-  const errorBranch = sourceSection(
-    'if (message.type === "error")',
-    'if (message.type === "status")',
-  );
-  assert.match(errorBranch, /if \(!analysisErrorTargetsLiveJob\(message\)\)/);
-  assert.match(errorBranch, /현재 분석 요청과 연결되지 않아 분석을 계속합니다/);
-  assert.match(errorBranch, /discardIncompleteAnalysis\("오류 · 부분 결과 폐기"\)/);
+test("WebSocket routing and board hit decisions come from executable pure modules", () => {
+  assert.match(app, /import \{ decideWebSocketMessage \} from "\.\/ws-message-state\.mjs"/);
+  assert.match(app, /candidateHitAtPoint/);
+  assert.match(app, /resolveBoardPointerIntent/);
 });
 
-test("incomplete analysis display is discarded on disconnect, engine failure, and noResults", () => {
-  const closeBranch = sourceSection(
-    'socket.addEventListener("close"',
-    'socket.addEventListener("message"',
+test("streaming candidate rerenders preserve keyboard focus by move without scrolling", () => {
+  assert.match(app, /const focusSnapshot = captureCandidateTableFocus\(\)/);
+  assert.match(app, /document\.activeElement/);
+  assert.match(app, /row\.dataset\.move === snapshot\.move/);
+  assert.match(app, /matchingRow\.focus\(\{ preventScroll: true \}\)/);
+  assert.match(app, /snapshot\.scrollContainer\.scrollLeft = snapshot\.scrollLeft/);
+  assert.match(app, /snapshot\.scrollContainer\.scrollTop = snapshot\.scrollTop/);
+  assert.match(app, /if \(hoveredCandidateMove === snapshot\.move\) hoveredCandidateMove = null/);
+  assert.equal(
+    matches(/restoreCandidateTableFocus\(focusSnapshot\)/g, app).length,
+    2,
+    "focus restoration must cover both populated and empty candidate rerenders",
   );
-  assert.match(closeBranch, /discardIncompleteAnalysis\("연결 끊김 · 부분 결과 폐기"\)/);
-
-  const noResultsBranch = sourceSection(
-    'if (analysisJob.state === "interrupted")',
-    "currentAnalysis = message",
-  );
-  assert.match(noResultsBranch, /discardIncompleteAnalysis\("noResults · 부분 결과 폐기"\)/);
-
-  const discard = sourceSection(
-    "function discardIncompleteAnalysis",
-    "function send",
-  );
-  assert.match(discard, /clearAnalysisDisplay\(\{ keepStatus: true \}\)/);
-  assert.match(discard, /elements\.responseKind\.textContent = responseKind/);
-});
-
-test("an official terminal commit cancels a live job and rejects late analysis", () => {
-  const positionCommit = sourceSection(
-    "function applyPositionState",
-    "async function refreshLegality",
-  );
-  assert.match(positionCommit, /if \(state\.isTerminal\) \{[\s\S]*?cancelAnalysis\(\)/);
-  assert.match(positionCommit, /종국 · MCTS 미실행/);
-
-  const analysisBranch = sourceSection(
-    'if (message.type !== "analysis"',
-    "if (!isAnalysisResponseCurrent",
-  );
-  assert.match(analysisBranch, /gameDocument\.positionState\?\.isTerminal/);
-  assert.match(analysisBranch, /cancelAnalysis\(\)/);
-  assert.match(analysisBranch, /clearAnalysisDisplay\(\{ keepStatus: true \}\)/);
-  assert.match(analysisBranch, /return/);
 });
