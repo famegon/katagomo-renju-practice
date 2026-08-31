@@ -1,6 +1,6 @@
 # KataGomo 기반 오목 초반 연습 프로그램
 
-현재는 **Stage 1 체크포인트, 제한된 Stage 1.5 OpenCL 검증, Stage 2 분석 서버 MVP와 진단 UI까지 완료**된 상태다. 공식 KataGomo `Gom2024` 소스와 공식 Renju `b28c512nbt` 모델만 사용한다. Apple M5에서 CPU/Eigen과 OpenCL 모두 실제 모델 로딩·15×15 Renju 분석을 통과했으며, FastAPI 서버가 한 개의 persistent analysis 프로세스를 관리하고 실제 중간/최종 JSON을 WebSocket으로 보낸다. 금수는 프로젝트가 재구현하지 않고 공식 `Board::isForbidden()`을 호출한다.
+현재는 **Stage 1 체크포인트, 제한된 Stage 1.5 OpenCL 검증, Stage 2 분석 서버, Stage 3 초반 반복 연습 UI까지 완료**된 상태다. 공식 KataGomo `Gom2024` 소스와 공식 Renju `b28c512nbt` 모델만 사용한다. Apple M5에서 CPU/Eigen과 OpenCL 모두 실제 모델 로딩·15×15 Renju 분석을 통과했으며, FastAPI 서버가 한 개의 persistent analysis 프로세스를 관리하고 실제 중간/최종 JSON을 WebSocket으로 보낸다. 흑/백 AI 연습, 6~16수 종료, 수별 평가와 반복 기록이 동작한다. 금수는 프로젝트가 재구현하지 않고 공식 `Board::isForbidden()`을 호출한다.
 
 공식 기준 자료:
 
@@ -62,7 +62,7 @@ make forbidden-helper # 공식 Board::isForbidden() 기반 helper 빌드
 make smoke       # 실제 15x15 Renju JSONL 분석
 make benchmark   # 8 threads, 100/500/1000 visits 순차 측정(약 2분)
 make benchmark-threads # 100 visits에서 1/2/4/6/8/10 threads 비교
-make dev         # persistent 엔진 + FastAPI + 진단 UI, http://127.0.0.1:8000
+make dev         # persistent 엔진 + FastAPI + 연습 UI, http://127.0.0.1:8000
 make test        # helper 포함 단위/프로세스/WebSocket 테스트
 make integration-test # 실제 Eigen 엔진·실제 모델 통합 테스트
 make compare-visits   # 실제 100/500 visits 후보 분포 기록
@@ -253,6 +253,8 @@ OpenCL은 이 Mac의 기본값으로 채택했고 CPU/Eigen은 fallback으로 �
 
 FastAPI lifespan 동안 KataGomo analysis 자식 프로세스 하나만 유지한다. 서버 시작 때 `query_version`으로 준비 상태를 확인하고, stdout의 JSON Lines와 stderr 로그를 분리한다. stderr는 `artifacts/stage2/engine-stderr.log`에 남는다.
 
+Stage 2까지의 작동 상태는 루트 저장소 커밋 `4786773` (`checkpoint: complete stage 2 analysis server`)에 보존했다. 그 체크포인트와 현재 작업 모두 모델, 빌드 산출물, 로그, `.venv`, `vendor/`를 커밋하지 않으며 공식 KataGomo 소스는 지정 커밋에서 clean 상태를 유지한다.
+
 - 한 WebSocket 분석 세션만 허용하며 두 번째 연결은 `session_busy`로 거부한다.
 - 요청마다 공개 UUID와 별도 엔진 ID를 붙인다.
 - 새 요청은 현재 엔진 ID에 `terminate`를 보내고 즉시 대체한다.
@@ -269,15 +271,18 @@ FastAPI lifespan 동안 KataGomo analysis 자식 프로세스 하나만 유지�
 |---|---|
 | `GET /api/status` | 엔진 PID/state/restart/stale 수, helper 및 Python 상태 |
 | `POST /api/legality` | 공식 helper의 `forbiddenMoves`와 `legalMoves` |
+| `GET /api/training/options` | 종료 수, 분석 부족 기준, 승률·채점 계약 |
+| `POST /api/training/evaluate` | 한 사용자 수의 실제 policy/visit/winrate 평가 |
+| `POST /api/training/summary` | 충분히 분석된 수 중 가장 큰 실수 3개 정렬 |
 | `WS /ws/analysis` | 분석 시작·취소와 중간/최종 스트림 |
 
 분석 요청 예:
 
 ```json
-{"action":"analyze","moves":[["B","H8"],["W","H9"]],"maxVisits":100,"reportDuringSearchEvery":0.5,"userColor":"B","clientRequestId":"example"}
+{"action":"analyze","moves":[["B","H8"],["W","H9"]],"maxVisits":100,"reportDuringSearchEvery":0.5,"userColor":"B","clientRequestId":"example","analysisPurpose":"user_pre","positionRevision":2,"sessionEpoch":"example-session"}
 ```
 
-다음은 OpenCL 서버에서 `make websocket-smoke`로 받은 **실제 최종 응답을 핵심 필드만 발췌**한 것이다. 이 smoke는 빠른 OpenCL 검색도 0.5초 간격 중간 응답을 반드시 내도록 500 visits를 사용하며, 서버 기본값은 100이다. 전체 policy 226개와 모든 후보/PV visits가 들어 있는 원문은 `artifacts/stage2/websocket-response.jsonl`에 있다.
+다음은 OpenCL 서버에서 `make websocket-smoke`로 받은 **실제 최종 응답을 핵심 필드만 발췌**한 것이다. 이 smoke는 빠른 OpenCL 검색도 0.5초 간격 중간 응답을 반드시 내도록 500 visits를 사용하며, 서버 기본값은 100이다. 전체 policy 226개와 모든 후보/PV visits가 들어 있는 원문은 `artifacts/stage3/websocket-response.jsonl`에 있다.
 
 ```json
 {
@@ -288,19 +293,19 @@ FastAPI lifespan 동안 KataGomo analysis 자식 프로세스 하나만 유지�
   "winratePerspective": "BLACK",
   "currentPlayer": "B",
   "userColor": "B",
-  "candidateVisitTotal": 506,
+  "candidateVisitTotal": 505,
   "policyLength": 226,
   "topCandidate": {
     "move": "G9",
     "rawPrior": 0.158203125,
-    "visits": 71,
-    "visitShare": 0.14031620553359683,
-    "blackWinrate": 0.977742337,
-    "pv": ["G9", "J7", "F10", "J10", "F8", "F7", "G8", "J8", "J11", "J6", "J9", "J4", "J5", "E7", "H7"]
+    "visits": 70,
+    "visitShare": 0.13861386138613863,
+    "blackWinrate": 0.976996265,
+    "pv": ["G9", "J7", "F10", "J10", "F8", "F7", "G8", "J8", "J11", "J6", "J9", "E7", "H7", "D7", "C7"]
   },
   "rootInfo": {
-    "visits": 507,
-    "blackWinrate": 0.96805789
+    "visits": 506,
+    "blackWinrate": 0.968195415
   }
 }
 ```
@@ -316,13 +321,34 @@ make forbidden-helper
 printf '%s\n' '{"moves":[],"nextPlayer":"B"}' | build/forbidden-helper/forbidden_helper
 ```
 
-fixture는 RIF/RenjuNet의 [공식 규칙](https://www.renju.net/rifrules/), [고급 교육 자료](https://www.renju.net/advanced/), [금수 도해](https://www.renju.net/upload/staticfiles/forbiddens.jpg)에 근거한다. 첫 네 사례는 도표의 국소 패턴을 KataGomo 좌표로 정규화·분리하고 교대 수순용 비간섭 filler를 더한 것이다. 백 미적용과 빈 판 H8은 각각 RIF §9.2와 §4.2에서 도출한 불변조건이다. 이 변환 내역은 각 fixture의 `provenance`에 기록했다. 장목, 4×4, 3×3, 가짜 열린 3, 백 미적용, 빈 판 일반 합법 수가 모두 통과한다. 진단 UI에서도 해당 3×3 패턴의 `M5`가 표시되고 클릭이 차단되는 것을 실제 브라우저로 확인했다.
+fixture는 RIF/RenjuNet의 [공식 규칙](https://www.renju.net/rifrules/), [고급 교육 자료](https://www.renju.net/advanced/), [금수 도해](https://www.renju.net/upload/staticfiles/forbiddens.jpg)에 근거한다. 첫 네 사례는 도표의 국소 패턴을 KataGomo 좌표로 정규화·분리하고 교대 수순용 비간섭 filler를 더한 것이다. 백 미적용과 빈 판 H8은 각각 RIF §9.2와 §4.2에서 도출한 불변조건이다. 이 변환 내역은 각 fixture의 `provenance`에 기록했다. 장목, 4×4, 3×3, 가짜 열린 3, 백 미적용, 빈 판 일반 합법 수가 모두 통과한다. 연습 UI에서도 해당 3×3 패턴의 `M5`가 표시되고 클릭이 차단되는 것을 실제 브라우저로 확인했다.
 
-## 진단 UI
+## Stage 3 초반 반복 연습 UI
 
-`make dev` 후 [http://127.0.0.1:8000](http://127.0.0.1:8000)에 접속한다. 15×15 교차점을 클릭하고 분석 시작/취소/무르기/초기화를 할 수 있다. 중간 결과마다 보드와 상위 후보 5개가 갱신되며 move, raw policy, visits, visit share, 흑 승률, PV와 raw-policy 상위 5개를 분리해 표시한다. 엔진/연결/검색/최종 상태, policy 길이, 후보 visits 합, 공식 금수도 함께 표시한다.
+`make dev` 후 [http://127.0.0.1:8000](http://127.0.0.1:8000)에 접속한다. 기본 설정은 15×15 Renju, 흑 사용자, 14수 종료, 매 수 즉시 평가, 100 visits다.
 
-이 페이지는 데이터 흐름을 검증하는 Stage 2 진단 화면이다. AI 자동 착수, 초반 종료와 채점, 반복 연습 UX는 아직 포함하지 않는다.
+- `AI 초반 연습`: 사용자가 흑 또는 백을 고르면 AI가 반대 색의 최종 `order=0` 수를 자동 착수한다.
+- `분석만`: AI 자동 착수 없이 흑·백을 자유롭게 놓고 현재 위치를 분석한다.
+- 종료 수는 6, 8, 10, 12, 14, 16수 중 고른다. 선택 수에 도달하면 추가 착수를 잠그고 결과를 정리한다.
+- 상위 후보 3/5/10개, 원 크기의 visit share/raw policy 전환, 후보별 흑 승률과 PV를 표시한다. 표의 후보를 hover/click하면 PV를 고정한다.
+- policy와 MCTS visits는 합치지 않는다. raw-policy 순위는 공식 helper의 현재 `legalMoves`만 대상으로 하고, visit share는 엔진이 반환한 모든 후보 visits 합을 분모로 한다.
+- 흑 금수는 helper 결과로 X 표시하고 클릭을 차단한다. 엔진 추천과 helper legality가 충돌하면 다른 후보로 바꾸지 않고 명확한 오류로 중단한다.
+- 즉시 평가와 종료 후 평가를 모두 지원한다. 완료 기록은 브라우저 `localStorage`의 `katagomo.openingPractice.v1`에 최근 20개까지 저장한다.
+- “같은 시작점”은 해당 연습을 시작했을 때의 정확한 수순, “새 초반 시작”은 빈 판을 뜻한다. 엔진이 결정적이면 같은 시작점의 AI 수가 반복될 수 있다.
+
+### 채점 계약
+
+절대 0~100 점수를 만들지 않는다. 사용자 수 직전의 최종 분석과 착수 직후의 다음 root 분석으로 다음을 기록한다.
+
+- 사용자의 raw policy와 공식 합법 수 중 policy 순위
+- 사용자의 실제 visits 순위, 엔진 추천 수의 visits 순위와 두 순위의 차이
+- 엔진 `order=0` 추천 수와 사용자 수
+- 사용자 관점의 착수 전/후 승률 변화와 추천 수 대비 승률 차이
+- pre/post root visits와 후보 visits 합
+
+엔진 `order`는 검색의 추천 순서이고 visits 순위와 반드시 같지는 않다. 실제 브라우저 검증에서도 `order=0`인 `J9`가 visits로는 2위인 사례가 나왔으므로 둘을 별도 필드로 유지한다. pre 분석이 최종이 아니거나, candidate/pre/post visits가 기준 50보다 적거나, 사용자 수가 MCTS 후보에 없거나, policy/legality 계약이 불완전하면 `분석 부족`으로 표시하고 확정적인 실수 순위에서 제외한다.
+
+각 WebSocket 요청과 REST 평가에는 session epoch, position revision, client request ID를 붙인다. Reset, Undo, 취소, 연결 종료 뒤 도착한 오래된 WS/REST/timer 결과는 현재 판에 적용하지 않는다. 동시에 하나의 분석 세션만 허용한다.
 
 ## 실제 후보 분포: 100 vs 500 visits
 
@@ -351,9 +377,11 @@ make websocket-smoke      # 실제 OpenCL 서버 WebSocket 검증
 make compare-visits
 ```
 
-단위/프로세스 테스트는 좌표 왕복, 수순 스키마, JSON Lines, 분할된 JSON stream, visit share, BLACK→현재 차례/백 사용자 승률, cancel, supersede 및 stale 무시, 엔진 종료·1회 재시작, policy 226, 단일 WebSocket 세션, 금수 helper를 다룬다. 실제 통합 테스트는 mock이 아니라 Eigen 엔진과 공식 모델로 `B H8, W H9`를 분석해 중간 응답 1개 이상과 최종 응답 1개, prior/visits/winrate/PV/policy를 확인한다.
+단위/프로세스 테스트는 좌표 왕복, 수순 스키마, JSON Lines, 분할된 JSON stream, visit share, BLACK→현재 차례/백 사용자 승률, cancel, supersede 및 stale 무시, 엔진 종료·1회 재시작, policy 226, 단일 WebSocket 세션, 금수 helper를 다룬다. Stage 3 테스트는 6~16수 경계와 기본 14수, policy/visit 순위, 추천 대비 signed gap, 분석 부족, 불법·PASS·중복 후보 거부, REST/WS request identity, NaN/Infinity JSON 오류 처리를 추가로 검증한다. 실제 통합 테스트는 mock이 아니라 Eigen 엔진과 공식 모델로 `B H8, W H9`를 분석한 뒤 실제 추천 수를 한 수 더 놓고 다시 분석한다. 중간/최종 응답과 prior/visits/winrate/PV/policy를 확인하고, 공식 helper의 legalMoves와 두 실제 분석으로 Stage 3 수별 평가까지 생성한다.
 
-최종 회귀 결과는 `make test` **39 passed, 1 deselected**, `make integration-test` **1 passed, 39 deselected**다. 실제 OpenCL `make websocket-smoke`의 최근 실행은 500 visits에서 중간 응답 11개와 최종 응답 1개, policy 길이 226, 후보 16개를 검증했다. 먼저 잘못된 수순에 JSON `validation_error`를 받고 같은 연결에서 분석이 계속되는 것도 확인한다. 중간 응답 개수와 후보 배분은 실행 스케줄링에 따라 달라질 수 있지만 smoke는 중간 응답 1개 이상과 필수 필드를 강제한다.
+2026-08-31의 최종 회귀 결과는 `make test` **69 passed, 1 deselected**, `make integration-test` **1 passed, 69 deselected**다. 실제 OpenCL `make websocket-smoke`는 500 visits에서 **중간 응답 11개, 최종 응답 1개, policy 226개, 후보 17개**와 Stage 3 request identity echo를 검증했다. 먼저 잘못된 수순에 JSON `validation_error`를 받고 같은 연결에서 분석이 계속되는 것도 확인한다. 중간 응답 개수와 후보 배분은 실행 스케줄링에 따라 달라진다.
+
+같은 날 실제 Apple M5 OpenCL 엔진과 공식 모델을 띄운 브라우저에서 기본 14수 흑 연습을 완주했다. AI 7수 자동 착수, 사용자 7수 평가, 수별 policy/visit/승률, 자동 종료, 결과표, 완료 후 추가 착수 차단, localStorage 1판 저장과 새로고침 후 복원을 확인했다. 모든 사용자 수는 분석 부족 없이 실제 서버 평가를 받았다. 백 연습에서는 빈 판에서 AI가 흑을 먼저 놓고 사용자 백 차례로 전환되는 것을 확인했다. 브라우저 console error는 없었다.
 
 ## 문제 해결
 
@@ -366,27 +394,28 @@ make compare-visits
 
 오류 때 가짜 분석값이나 Python 금수 구현으로 대체하지 않는다.
 
-## Stage 3 전에 결정할 사항
+## Stage 3에서 확정한 선택과 다음 결정
 
-1. Apple M5 실측상 100 visits는 반응성이 좋고 500은 더 안정적이다. AI 착수와 수별 채점에 각각 어떤 기본 분석량을 쓸지 정한다.
-2. 분석 visits가 적을 때 “분석 부족”으로 판정할 최소 root/candidate visits 기준을 정한다.
-3. AI가 최종 응답 뒤에만 둘지, 충분한 중간 visits에 도달하면 둘지 정한다.
-4. “같은 시작점”과 “새 초반 시작”이 빈 판, 고정 첫 수, 무작위 policy 시작 중 무엇을 뜻하는지 정한다.
-5. 즉시 채점과 종료 후 채점에서 사용자에게 보여줄 winrate 차이·visit 순위·policy의 표현 방식을 정한다. 엔진 원시값은 계속 BLACK으로 유지한다.
+- 기본 100 visits, 선택 500 visits로 두었다. Apple M5 OpenCL에서는 100이 실시간 연습에 충분히 반응성이 좋다.
+- `분석 부족` 하한은 candidate/pre/post 기준 50 visits다. 이는 신뢰도 보증 수치가 아니라 지나치게 작은 검색을 확정적으로 표현하지 않기 위한 UI 경계다.
+- AI는 중간 응답이 아니라 최종 응답의 `order=0`에서만 착수한다.
+- 승률 원시는 항상 BLACK 관점이며 화면에서만 현재 차례/사용자 관점을 명시적으로 변환한다.
+- Metal 포팅은 시작하지 않았고 현재 OpenCL 기본, Eigen fallback을 유지한다.
 
-Stage 3 범위는 AI 자동 착수, 흑/백 연습, 6~16수 종료, 수별 채점과 가장 큰 실수 3개, 즉시/종료 후 채점, 반복 버튼, localStorage 기록이다. OpenCL/Metal 포팅 작업은 포함하지 않는다.
+다음 단계 전에 정할 것은 연습 시작점 생성 방식이다. 현재 “새 초반”은 빈 판이라 결정적 엔진과 반복하면 비슷한 진행이 나올 수 있다. policy 기반 다양화, 고정 오프닝 묶음, 사용자가 고른 첫 수 중 어느 방식을 추가할지 결정해야 한다. 또 100 visits 채점과 별도의 더 깊은 사후 재분석을 분리할지도 선택 사항이다.
 
 ## 프로젝트 경로
 
 ```text
 config/                         CPU/OpenCL analysis 및 benchmark 설정
 native/forbidden_helper/        공식 Board::isForbidden() 호출 어댑터
-server/                         FastAPI, persistent engine, 변환/legality
-web/                            Stage 2 진단 보드
+server/                         FastAPI, persistent engine, 변환/legality/채점
+web/                            Stage 3 초반 반복 연습 UI
 tests/                          단위·프로세스·실제 엔진 통합 테스트
 scripts/                        빌드, 실행, smoke, 후보 비교
 artifacts/stage1_5/opencl/      OpenCL 실검증 원문, Git 제외
 artifacts/stage2/               실제 서버/후보 분포 결과, Git 제외
+artifacts/stage3/               실제 Stage 3 WebSocket 검증 결과, Git 제외
 vendor/KataGomo/                공식 clean clone, Git 제외
 build/engine-eigen/             CPU/Eigen 실행 파일, Git 제외
 build/engine-opencl/            OpenCL 실행 파일, Git 제외

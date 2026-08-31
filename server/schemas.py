@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from typing import Annotated, Literal
+from typing import Annotated, Any, Literal
 
 from pydantic import BaseModel, Field, field_validator, model_validator
 
@@ -40,6 +40,11 @@ class AnalyzeCommand(BaseModel):
     reportDuringSearchEvery: Annotated[float, Field(ge=0.001, le=60.0)] = 0.5
     userColor: Player = "B"
     clientRequestId: str | None = Field(default=None, max_length=128)
+    analysisPurpose: Literal[
+        "manual", "user_pre", "post_user_ai", "final_grade"
+    ] = "manual"
+    positionRevision: Annotated[int, Field(ge=0)] = 0
+    sessionEpoch: str | None = Field(default=None, max_length=128)
 
     @field_validator("moves")
     @classmethod
@@ -71,3 +76,44 @@ class LegalityRequest(BaseModel):
             )
         return self
 
+
+class TrainingEvaluateRequest(BaseModel):
+    ply: Annotated[int, Field(ge=1, le=225)]
+    userMove: str
+    userColor: Player
+    preAnalysis: dict[str, Any]
+    postRootInfo: dict[str, Any]
+    legalMoves: list[str] | None = None
+    minimumCandidateVisits: Annotated[int, Field(ge=0)] = 50
+    clientEvaluationId: str | None = Field(default=None, max_length=128)
+    sessionEpoch: str | None = Field(default=None, max_length=128)
+    prePositionRevision: Annotated[int | None, Field(ge=0)] = None
+    postPositionRevision: Annotated[int | None, Field(ge=0)] = None
+
+    @field_validator("userMove")
+    @classmethod
+    def validate_user_move(cls, move: str) -> str:
+        coordinate = normalize_coordinate(move)
+        if coordinate == "PASS":
+            raise ValueError("Training evaluations do not accept pass")
+        return coordinate
+
+    @field_validator("legalMoves")
+    @classmethod
+    def validate_legal_moves(cls, moves: list[str] | None) -> list[str] | None:
+        if moves is None:
+            return None
+        normalized: list[str] = []
+        for move in moves:
+            coordinate = normalize_coordinate(move)
+            if coordinate != "PASS":
+                normalized.append(coordinate)
+        return normalized
+
+
+class TrainingSummaryRequest(BaseModel):
+    evaluations: list[dict[str, Any]] = Field(default_factory=list, max_length=113)
+    limit: Annotated[int, Field(ge=0, le=3)] = 3
+    clientSummaryId: str | None = Field(default=None, max_length=128)
+    sessionEpoch: str | None = Field(default=None, max_length=128)
+    positionRevision: Annotated[int | None, Field(ge=0)] = None

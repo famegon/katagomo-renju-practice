@@ -16,6 +16,9 @@ def test_move_sequence_normalizes_and_serializes_to_engine_json_shape():
     assert payload["rules"] == "renju"
     assert payload["maxVisits"] == 100
     assert payload["reportDuringSearchEvery"] == 0.5
+    assert payload["analysisPurpose"] == "manual"
+    assert payload["positionRevision"] == 0
+    assert payload["sessionEpoch"] is None
 
 
 @pytest.mark.parametrize(

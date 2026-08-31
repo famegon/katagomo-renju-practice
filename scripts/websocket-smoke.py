@@ -9,7 +9,7 @@ from websockets.asyncio.client import connect
 
 
 async def main() -> None:
-    output_path = Path("artifacts/stage2/websocket-response.jsonl")
+    output_path = Path("artifacts/stage3/websocket-response.jsonl")
     output_path.parent.mkdir(parents=True, exist_ok=True)
     responses: list[dict] = []
     async with connect("ws://127.0.0.1:8000/ws/analysis") as websocket:
@@ -40,6 +40,9 @@ async def main() -> None:
                     "reportDuringSearchEvery": 0.5,
                     "userColor": "B",
                     "clientRequestId": "websocket-real-smoke",
+                    "analysisPurpose": "user_pre",
+                    "positionRevision": 2,
+                    "sessionEpoch": "websocket-smoke-session",
                 },
                 separators=(",", ":"),
             )
@@ -64,6 +67,23 @@ async def main() -> None:
     final = analysis[-1]
     if final.get("policyLength") != 226 or len(final.get("policy", [])) != 226:
         raise AssertionError("Expected the complete 226-entry policy array")
+    expected_identity = {
+        "clientRequestId": "websocket-real-smoke",
+        "analysisPurpose": "user_pre",
+        "positionRevision": 2,
+        "sessionEpoch": "websocket-smoke-session",
+        "requestedMaxVisits": 500,
+        "positionMoveCount": 2,
+    }
+    mismatched_identity = {
+        field: final.get(field)
+        for field, expected in expected_identity.items()
+        if final.get(field) != expected
+    }
+    if mismatched_identity:
+        raise AssertionError(
+            f"Final response identity mismatch: {mismatched_identity}"
+        )
     if not final.get("candidates"):
         raise AssertionError("Expected at least one real KataGomo candidate")
     top_candidate = final["candidates"][0]
@@ -94,6 +114,7 @@ async def main() -> None:
                 "policyLength": final["policyLength"],
                 "candidateCount": len(final["candidates"]),
                 "validationError": validation_error["code"],
+                "identity": expected_identity,
                 "topCandidate": top_candidate,
             },
             indent=2,

@@ -19,6 +19,9 @@ def test_fastapi_websocket_stream_on_python_314(fake_settings):
                     "maxVisits": 42,
                     "userColor": "W",
                     "clientRequestId": "websocket-test",
+                    "analysisPurpose": "user_pre",
+                    "positionRevision": 7,
+                    "sessionEpoch": "session-test",
                 }
             )
             final = None
@@ -29,6 +32,11 @@ def test_fastapi_websocket_stream_on_python_314(fake_settings):
                     break
             assert final is not None
             assert final["clientRequestId"] == "websocket-test"
+            assert final["analysisPurpose"] == "user_pre"
+            assert final["positionRevision"] == 7
+            assert final["sessionEpoch"] == "session-test"
+            assert final["requestedMaxVisits"] == 42
+            assert final["positionMoveCount"] == 2
             assert final["policyLength"] == 226
             assert final["candidates"][0]["rawPrior"] == 0.6
 
@@ -58,6 +66,13 @@ def test_websocket_validation_error_is_json_and_connection_stays_usable(fake_set
             assert error["code"] == "validation_error"
             assert error["details"]
 
+            websocket.send_text(
+                '{"action":"analyze","moves":[],"maxVisits":Infinity}'
+            )
+            nonfinite_error = websocket.receive_json()
+            assert nonfinite_error["code"] == "validation_error"
+            assert nonfinite_error["details"][0]["input"] == "inf"
+
             websocket.send_json(
                 {
                     "action": "analyze",
@@ -71,3 +86,16 @@ def test_websocket_validation_error_is_json_and_connection_stays_usable(fake_set
                 if response.get("type") == "analysis" and response.get("isFinal"):
                     break
             assert response["clientRequestId"] == "after-validation-error"
+
+
+def test_rest_validation_error_with_nonfinite_input_remains_json(fake_settings):
+    with TestClient(create_app(fake_settings)) as client:
+        response = client.post(
+            "/api/training/evaluate",
+            content='{"ply":Infinity}',
+            headers={"Content-Type": "application/json"},
+        )
+        assert response.status_code == 422
+        body = response.json()
+        assert isinstance(body["detail"], list)
+        assert any(error.get("input") == "inf" for error in body["detail"])

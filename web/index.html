@@ -3,37 +3,76 @@
   <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
-    <title>KataGomo 진단 보드</title>
+    <title>KataGomo 오목 초반 연습</title>
     <link rel="stylesheet" href="/static/styles.css" />
   </head>
   <body>
     <main>
       <header>
         <div>
-          <p class="eyebrow">Stage 2 · 실제 엔진 데이터</p>
-          <h1>KataGomo Renju 진단 보드</h1>
+          <p class="eyebrow">Stage 3 · KataGomo policy + MCTS</p>
+          <h1>Renju 초반 연습실</h1>
+          <p class="subtitle">15×15 · 엔진 원시 승률은 항상 흑 관점</p>
         </div>
-        <div class="status-cluster">
+        <div class="status-cluster" aria-live="polite">
           <span id="engine-status" class="status">엔진 확인 중</span>
-          <span id="analysis-status" class="status neutral">분석 대기</span>
+          <span id="analysis-status" class="status neutral">연결 대기</span>
+          <span id="practice-phase" class="status neutral">설정 중</span>
         </div>
       </header>
 
       <section class="workspace">
-        <div class="board-panel">
-          <canvas id="board" width="760" height="760" aria-label="15×15 오목판"></canvas>
-          <p id="legality-status" class="notice">금수 정보를 확인 중입니다.</p>
+        <div class="board-column">
+          <section class="board-panel" aria-labelledby="board-heading">
+            <div class="board-heading-row">
+              <div>
+                <h2 id="board-heading">오목판</h2>
+                <p>
+                  <strong id="next-player">흑</strong> 차례 ·
+                  <span id="ply-count">0수</span>
+                  <span id="turn-owner">· 설정 가능</span>
+                </p>
+              </div>
+              <span id="session-complete" class="session-flag" data-complete="false">진행 전</span>
+            </div>
+            <canvas
+              id="board"
+              width="760"
+              height="760"
+              tabindex="0"
+              role="img"
+              aria-label="15×15 Renju 오목판"
+              aria-describedby="board-help board-summary"
+            ></canvas>
+            <p id="board-help" class="board-help">
+              교차점을 클릭해 착수합니다. 키보드는 방향키로 이동하고 Enter로 착수합니다.
+            </p>
+            <p id="board-summary" class="sr-only" aria-live="polite">빈 오목판, 흑 차례</p>
+            <p id="legality-status" class="notice" aria-live="polite">금수 정보를 확인 중입니다.</p>
+            <p id="action-notice" class="notice action-notice" aria-live="assertive"></p>
+          </section>
+
+          <section id="candidate-focus-card" class="card candidate-focus" aria-live="polite">
+            <div class="section-heading">
+              <h2>선택 후보와 PV</h2>
+              <button id="clear-pv" class="text-button" type="button">PV 고정 해제</button>
+            </div>
+            <p id="candidate-focus">후보 원이나 표의 행에 마우스를 올리면 PV가 반투명 수순으로 표시됩니다.</p>
+          </section>
         </div>
 
         <aside>
-          <section class="controls card">
-            <div class="field-row">
-              <label>다음 차례 <strong id="next-player">흑</strong></label>
+          <section class="controls card" aria-labelledby="settings-heading">
+            <div class="section-heading">
+              <h2 id="settings-heading">연습 설정</h2>
+              <span>설정은 연습 시작 시 고정됩니다</span>
+            </div>
+            <div class="settings-grid">
               <label>
-                Visits
-                <select id="max-visits">
-                  <option value="100" selected>100</option>
-                  <option value="500">500</option>
+                실행 모드
+                <select id="mode">
+                  <option value="practice" selected>AI 초반 연습</option>
+                  <option value="analysis">분석만</option>
                 </select>
               </label>
               <label>
@@ -43,25 +82,82 @@
                   <option value="W">백</option>
                 </select>
               </label>
+              <label>
+                종료 수
+                <select id="stop-ply">
+                  <option value="6">6수</option>
+                  <option value="8">8수</option>
+                  <option value="10">10수</option>
+                  <option value="12">12수</option>
+                  <option value="14" selected>14수</option>
+                  <option value="16">16수</option>
+                </select>
+              </label>
+              <label>
+                채점 표시
+                <select id="grading-mode">
+                  <option value="immediate" selected>매 수 즉시</option>
+                  <option value="end">종료 후</option>
+                </select>
+              </label>
+              <label>
+                분석량
+                <select id="max-visits">
+                  <option value="100" selected>100 visits</option>
+                  <option value="500">500 visits</option>
+                </select>
+              </label>
+            </div>
+            <div class="button-row primary-actions">
+              <button id="practice-start" class="primary" type="button">이 위치에서 연습 시작</button>
+              <button id="analyze" type="button">현재 위치 분석</button>
+              <button id="cancel" type="button">분석 취소</button>
             </div>
             <div class="button-row">
-              <button id="analyze" class="primary">분석 시작</button>
-              <button id="cancel">취소</button>
-              <button id="undo">무르기</button>
-              <button id="reset">초기화</button>
+              <button id="undo" type="button">무르기</button>
+              <button id="reset" type="button">초기화</button>
             </div>
           </section>
 
-          <section class="card">
+          <section class="card" aria-labelledby="overlay-heading">
             <div class="section-heading">
-              <h2>MCTS 상위 후보 5개</h2>
-              <span>승률은 항상 흑 관점</span>
+              <h2 id="overlay-heading">후보 오버레이</h2>
+              <span>크기는 선택한 지표에 비례</span>
+            </div>
+            <div class="field-row compact-fields">
+              <label>
+                원 크기
+                <select id="size-metric">
+                  <option value="visits" selected>Visit share</option>
+                  <option value="policy">Raw policy</option>
+                </select>
+              </label>
+              <label>
+                후보 수
+                <select id="top-count">
+                  <option value="3">상위 3개</option>
+                  <option value="5" selected>상위 5개</option>
+                  <option value="10">상위 10개</option>
+                </select>
+              </label>
+            </div>
+            <p class="legend">
+              <span><i class="legend-dot first"></i> MCTS 1위</span>
+              <span><i class="legend-dot pv"></i> PV 수순</span>
+              <span><i class="legend-cross">×</i> 흑 금수</span>
+            </p>
+          </section>
+
+          <section class="card" aria-labelledby="candidate-heading">
+            <div class="section-heading">
+              <h2 id="candidate-heading">MCTS 후보</h2>
+              <span id="candidate-perspective">흑 승률(B) · Raw policy</span>
             </div>
             <div class="table-wrap">
               <table>
                 <thead>
                   <tr>
-                    <th>수</th>
+                    <th>순위/수</th>
                     <th>Raw policy</th>
                     <th>Visits</th>
                     <th>Visit share</th>
@@ -76,24 +172,82 @@
             </div>
           </section>
 
-          <section class="card">
+          <section class="card" aria-labelledby="policy-heading">
             <div class="section-heading">
-              <h2>Raw policy 상위 5개</h2>
-              <span>MCTS visits와 별도 표시</span>
+              <h2 id="policy-heading">Raw policy 순위</h2>
+              <span>MCTS visits와 독립된 신경망 출력</span>
             </div>
             <ol id="raw-policy" class="policy-list">
               <li>분석 결과 없음</li>
             </ol>
           </section>
 
-          <section class="card details">
-            <h2>프로토콜 상태</h2>
+          <section id="instant-feedback-card" class="card feedback-card" hidden aria-live="polite">
+            <div class="section-heading">
+              <h2>방금 둔 수</h2>
+              <span id="instant-grade-state">실제 엔진 분석</span>
+            </div>
+            <div id="instant-feedback"></div>
+          </section>
+
+          <section id="results-card" class="card results-card" hidden aria-labelledby="results-heading">
+            <div class="section-heading">
+              <h2 id="results-heading">초반 연습 결과</h2>
+              <span>사용자 관점 승률</span>
+            </div>
+            <p id="result-summary" class="result-summary"></p>
+            <div class="table-wrap">
+              <table class="grade-table">
+                <thead>
+                  <tr>
+                    <th>수순</th>
+                    <th>사용자 수</th>
+                    <th>추천 1위</th>
+                    <th>Policy</th>
+                    <th>Visit 순위(사용자/추천/차이)</th>
+                    <th>착수 전→후</th>
+                    <th>추천 대비</th>
+                    <th>분석량</th>
+                  </tr>
+                </thead>
+                <tbody id="summary-body"></tbody>
+              </table>
+            </div>
+            <div class="mistake-panel">
+              <h3>가장 큰 실수 3개</h3>
+              <ol id="mistakes"></ol>
+            </div>
+            <div class="button-row">
+              <button id="same-start" class="primary" type="button">같은 시작점 다시 연습</button>
+              <button id="new-opening" type="button">새 초반 시작</button>
+            </div>
+          </section>
+
+          <section class="card details" aria-labelledby="protocol-heading">
+            <div class="section-heading">
+              <h2 id="protocol-heading">엔진 데이터 상태</h2>
+              <span id="response-kind">—</span>
+            </div>
             <dl>
               <div><dt>Request ID</dt><dd id="request-id">—</dd></div>
               <div><dt>Policy 길이</dt><dd id="policy-length">—</dd></div>
               <div><dt>후보 visits 합</dt><dd id="visit-total">—</dd></div>
-              <div><dt>응답</dt><dd id="response-kind">—</dd></div>
+              <div><dt>Root visits</dt><dd id="root-visits">—</dd></div>
+              <div><dt>흑 승률</dt><dd id="black-winrate">—</dd></div>
+              <div><dt>현재 차례 승률</dt><dd id="current-winrate">—</dd></div>
+              <div><dt>사용자 승률</dt><dd id="user-winrate">—</dd></div>
+              <div><dt>승률 원시 관점</dt><dd>BLACK</dd></div>
             </dl>
+          </section>
+
+          <section class="card history-card" aria-labelledby="history-heading">
+            <div class="section-heading">
+              <h2 id="history-heading">이 브라우저의 연습 기록</h2>
+              <span><strong id="history-count">0</strong>판 저장</span>
+            </div>
+            <ol id="history-list" class="history-list">
+              <li>아직 완료한 연습이 없습니다.</li>
+            </ol>
           </section>
         </aside>
       </section>
@@ -101,4 +255,3 @@
     <script type="module" src="/static/app.js"></script>
   </body>
 </html>
-

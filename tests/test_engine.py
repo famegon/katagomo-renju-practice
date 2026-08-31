@@ -112,3 +112,31 @@ async def test_malformed_policy_is_reported_instead_of_used_as_raw_prior(fake_se
         assert engine.active is None
     finally:
         await engine.stop()
+
+
+@pytest.mark.asyncio
+async def test_analyzing_status_precedes_even_an_immediate_final(fake_settings):
+    engine = KataGomoEngine(fake_settings)
+    await engine.start()
+    queue = asyncio.Queue()
+    try:
+        await engine.submit(
+            moves=[], max_visits=42, report_during_search_every=0.5,
+            user_color="B", client_request_id="fast-final", output_queue=queue,
+            analysis_purpose="user_pre", position_revision=3,
+            session_epoch="epoch-1",
+        )
+        first = await asyncio.wait_for(queue.get(), timeout=5)
+        assert first["type"] == "status"
+        assert first["status"] == "analyzing"
+        assert first["analysisPurpose"] == "user_pre"
+        assert first["positionRevision"] == 3
+        assert first["sessionEpoch"] == "epoch-1"
+
+        final = await next_of_type(queue, "analysis")
+        while not final["isFinal"]:
+            final = await next_of_type(queue, "analysis")
+        assert final["requestedMaxVisits"] == 42
+        assert final["positionMoveCount"] == 0
+    finally:
+        await engine.stop()

@@ -23,6 +23,11 @@ class ActiveRequest:
     client_request_id: str | None
     user_color: str
     output_queue: asyncio.Queue[dict[str, Any]]
+    analysis_purpose: str
+    position_revision: int
+    session_epoch: str | None
+    requested_max_visits: int
+    position_move_count: int
 
 
 class KataGomoEngine:
@@ -168,6 +173,9 @@ class KataGomoEngine:
         user_color: str,
         client_request_id: str | None,
         output_queue: asyncio.Queue[dict[str, Any]],
+        analysis_purpose: str = "manual",
+        position_revision: int = 0,
+        session_epoch: str | None = None,
     ) -> str:
         await self.cancel_active(reason="superseded")
         process = self.process
@@ -189,6 +197,11 @@ class KataGomoEngine:
             client_request_id=client_request_id,
             user_color=user_color,
             output_queue=output_queue,
+            analysis_purpose=analysis_purpose,
+            position_revision=position_revision,
+            session_epoch=session_epoch,
+            requested_max_visits=max_visits,
+            position_move_count=len(moves),
         )
         self.active = context
         self.state = "analyzing"
@@ -214,6 +227,20 @@ class KataGomoEngine:
                 "rootSymmetryPruning": False,
             },
         }
+        await output_queue.put(
+            {
+                "type": "status",
+                "status": "analyzing",
+                "requestId": request_id,
+                "clientRequestId": client_request_id,
+                "analysisPurpose": context.analysis_purpose,
+                "positionRevision": context.position_revision,
+                "sessionEpoch": context.session_epoch,
+                "requestedMaxVisits": context.requested_max_visits,
+                "positionMoveCount": context.position_move_count,
+                "engine": self.snapshot(),
+            }
+        )
         try:
             await self._send_json(engine_request)
         except Exception:
@@ -221,15 +248,6 @@ class KataGomoEngine:
                 self.active = None
                 self.state = "ready" if process.returncode is None else "error"
             raise
-        await output_queue.put(
-            {
-                "type": "status",
-                "status": "analyzing",
-                "requestId": request_id,
-                "clientRequestId": client_request_id,
-                "engine": self.snapshot(),
-            }
-        )
         return request_id
 
     async def cancel_active(self, *, reason: str = "user") -> bool:
@@ -258,6 +276,11 @@ class KataGomoEngine:
                 "reason": reason,
                 "requestId": context.request_id,
                 "clientRequestId": context.client_request_id,
+                "analysisPurpose": context.analysis_purpose,
+                "positionRevision": context.position_revision,
+                "sessionEpoch": context.session_epoch,
+                "requestedMaxVisits": context.requested_max_visits,
+                "positionMoveCount": context.position_move_count,
                 "engine": self.snapshot(),
             }
         )
@@ -337,6 +360,11 @@ class KataGomoEngine:
                         "message": str(raw.get("error")),
                         "requestId": context.request_id,
                         "clientRequestId": context.client_request_id,
+                        "analysisPurpose": context.analysis_purpose,
+                        "positionRevision": context.position_revision,
+                        "sessionEpoch": context.session_epoch,
+                        "requestedMaxVisits": context.requested_max_visits,
+                        "positionMoveCount": context.position_move_count,
                         "engineResponse": raw,
                     }
                 )
@@ -353,6 +381,11 @@ class KataGomoEngine:
                         "message": str(raw.get("warning")),
                         "requestId": context.request_id,
                         "clientRequestId": context.client_request_id,
+                        "analysisPurpose": context.analysis_purpose,
+                        "positionRevision": context.position_revision,
+                        "sessionEpoch": context.session_epoch,
+                        "requestedMaxVisits": context.requested_max_visits,
+                        "positionMoveCount": context.position_move_count,
                         "engineResponse": raw,
                     }
                 )
@@ -372,6 +405,11 @@ class KataGomoEngine:
                         "message": str(exc),
                         "requestId": context.request_id,
                         "clientRequestId": context.client_request_id,
+                        "analysisPurpose": context.analysis_purpose,
+                        "positionRevision": context.position_revision,
+                        "sessionEpoch": context.session_epoch,
+                        "requestedMaxVisits": context.requested_max_visits,
+                        "positionMoveCount": context.position_move_count,
                     }
                 )
                 if self.active is context:
@@ -389,6 +427,11 @@ class KataGomoEngine:
                     pass
                 continue
             transformed["clientRequestId"] = context.client_request_id
+            transformed["analysisPurpose"] = context.analysis_purpose
+            transformed["positionRevision"] = context.position_revision
+            transformed["sessionEpoch"] = context.session_epoch
+            transformed["requestedMaxVisits"] = context.requested_max_visits
+            transformed["positionMoveCount"] = context.position_move_count
             await context.output_queue.put(transformed)
             if transformed["isFinal"] and self.active is context:
                 self.active = None
@@ -435,6 +478,11 @@ class KataGomoEngine:
                     "message": self.last_error,
                     "requestId": context.request_id,
                     "clientRequestId": context.client_request_id,
+                    "analysisPurpose": context.analysis_purpose,
+                    "positionRevision": context.position_revision,
+                    "sessionEpoch": context.session_epoch,
+                    "requestedMaxVisits": context.requested_max_visits,
+                    "positionMoveCount": context.position_move_count,
                     "restartAttempted": self.restart_count < self.restart_limit,
                 }
             )
