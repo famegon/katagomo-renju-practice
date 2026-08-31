@@ -5,6 +5,13 @@ project_root="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)"
 model_path="${KATAGOMO_MODEL:-${project_root}/models/zhizi_renju28b_s1600.bin.gz}"
 expected_size="269873929"
 expected_sha256="5aa1381aa37ba1b724469c5c8df3b59177079f5c57b355856e144b8146581f6f"
+
+if [[ ! -f "${model_path}" ]]; then
+  echo "Renju model is missing: ${model_path}" >&2
+  echo "Run: make model, or set KATAGOMO_MODEL to the verified official model." >&2
+  exit 1
+fi
+
 actual_size="$(wc -c < "${model_path}" | tr -d ' ')"
 actual_sha256="$(shasum -a 256 "${model_path}" | awk '{print $1}')"
 

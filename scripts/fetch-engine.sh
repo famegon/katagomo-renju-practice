@@ -11,26 +11,31 @@ if [[ -e "${engine_dir}" && ! -d "${engine_dir}/.git" ]]; then
   exit 1
 fi
 
-if [[ -d "${engine_dir}/.git" ]] && git -C "${engine_dir}" rev-parse --verify HEAD >/dev/null 2>&1; then
-  actual_commit="$(git -C "${engine_dir}" rev-parse HEAD)"
+if [[ -d "${engine_dir}/.git" ]]; then
   actual_remote="$(git -C "${engine_dir}" remote get-url origin 2>/dev/null || true)"
-  if [[ "${actual_commit}" != "${engine_commit}" ]]; then
-    echo "Existing KataGomo checkout is ${actual_commit}, expected ${engine_commit}." >&2
-    echo "It was left untouched. Move it aside or select the recorded commit manually." >&2
-    exit 1
-  fi
-  if [[ "${actual_remote}" != "${engine_repo}" ]]; then
+  if [[ -n "${actual_remote}" && "${actual_remote}" != "${engine_repo}" ]]; then
     echo "Existing KataGomo origin is ${actual_remote}, expected ${engine_repo}." >&2
     echo "It was left untouched." >&2
     exit 1
+  fi
+  if [[ -z "${actual_remote}" ]]; then
+    git -C "${engine_dir}" remote add origin "${engine_repo}"
   fi
   if [[ -n "$(git -C "${engine_dir}" status --porcelain)" ]]; then
     echo "Existing KataGomo checkout has local changes or untracked files." >&2
     echo "It was left untouched; restore a clean official checkout before building." >&2
     exit 1
   fi
-  echo "KataGomo source already verified: ${actual_commit}"
-  exit 0
+  if git -C "${engine_dir}" rev-parse --verify HEAD >/dev/null 2>&1; then
+    actual_commit="$(git -C "${engine_dir}" rev-parse HEAD)"
+    if [[ "${actual_commit}" != "${engine_commit}" ]]; then
+      echo "Existing KataGomo checkout is ${actual_commit}, expected ${engine_commit}." >&2
+      echo "It was left untouched. Move it aside or select the recorded commit manually." >&2
+      exit 1
+    fi
+    echo "KataGomo source already verified: ${actual_commit}"
+    exit 0
+  fi
 fi
 
 mkdir -p "${project_root}/vendor"
@@ -45,3 +50,5 @@ echo "Fetching official KataGomo Gom2024 commit ${engine_commit}..."
 git -C "${engine_dir}" fetch --depth 1 origin "${engine_commit}"
 git -C "${engine_dir}" checkout --detach "${engine_commit}"
 test "$(git -C "${engine_dir}" rev-parse HEAD)" = "${engine_commit}"
+test "$(git -C "${engine_dir}" remote get-url origin)" = "${engine_repo}"
+test -z "$(git -C "${engine_dir}" status --porcelain)"

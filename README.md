@@ -1,6 +1,6 @@
 # KataGomo 기반 오목 초반 연습 프로그램
 
-현재는 **Stage 1 체크포인트, 제한된 Stage 1.5 OpenCL 검증, Stage 2 분석 서버, Stage 3 초반 반복 연습 UI까지 완료**된 상태다. 공식 KataGomo `Gom2024` 소스와 공식 Renju `b28c512nbt` 모델만 사용한다. Apple M5에서 CPU/Eigen과 OpenCL 모두 실제 모델 로딩·15×15 Renju 분석을 통과했으며, FastAPI 서버가 한 개의 persistent analysis 프로세스를 관리하고 실제 중간/최종 JSON을 WebSocket으로 보낸다. 흑/백 AI 연습, 6~16수 종료, 수별 평가와 반복 기록이 동작한다. 금수는 프로젝트가 재구현하지 않고 공식 `Board::isForbidden()`을 호출한다.
+현재는 **Stage 1 엔진 검증, 제한된 Stage 1.5 OpenCL 검증, Stage 2 분석 서버, Stage 3 보드 UI, Stage 4 반복 연습·채점, Stage 5 실행 재현성 검증까지 완료**된 상태다. 공식 KataGomo `Gom2024` 소스와 공식 Renju `b28c512nbt` 모델만 사용한다. Apple M5에서 CPU/Eigen과 OpenCL 모두 실제 모델 로딩·15×15 Renju 분석을 통과했으며, FastAPI 서버가 한 개의 persistent analysis 프로세스를 관리하고 실제 중간/최종 JSON을 WebSocket으로 보낸다. 흑/백 AI 연습, 6~16수 종료, 수별 평가와 반복 기록이 동작한다. 금수는 프로젝트가 재구현하지 않고 공식 `Board::isForbidden()`을 호출한다.
 
 공식 기준 자료:
 
@@ -54,7 +54,7 @@ CPython 3.14.6에서 설치, import, 서버 기동, WebSocket, 테스트까지 �
 모든 명령은 이 README가 있는 프로젝트 루트에서 실행한다.
 
 ```bash
-make setup       # cmake/eigen/jq + 기존 Python 3.11 이상 .venv와 Python 의존성
+make setup       # cmake/eigen/jq + 기존 Python 3.11 이상 .venv와 고정된 Python 의존성
 make engine      # 공식 커밋을 가져와 ARM64 CPU/Eigen 엔진 빌드
 make opencl      # macOS OpenCL 엔진 빌드(이 Mac에서 실추론 검증됨)
 make model       # 공식 모델 269,873,929바이트 다운로드 및 검증
@@ -70,6 +70,8 @@ make compare-visits   # 실제 100/500 visits 후보 분포 기록
 
 `make model`은 약 257 MiB를 받는다. 다른 릴리스 묶음이나 Windows 실행 파일은 받지 않는다. 기존 엔진 디렉터리의 커밋이 다르거나 기존 모델의 해시가 다르면 스크립트는 덮어쓰지 않고 중단한다.
 
+`requirements-lock.txt`는 이 Mac에서 검증한 direct/transitive Python 패키지를 모두 고정한다. `requirements.txt`와 `requirements-dev.txt`는 사람이 관리하는 직접 의존성 목록이고, 업그레이드할 때만 lock을 의도적으로 다시 만든다.
+
 현재 설치를 다시 확인하기만 하려면 다음으로 충분하다.
 
 ```bash
@@ -78,7 +80,7 @@ build/engine-eigen/katago version
 make smoke
 ```
 
-기본 경로를 바꿀 때는 다음 환경변수를 쓸 수 있다.
+기본 경로를 바꿀 때는 다음 환경변수를 쓸 수 있다. `make dev`는 선택된 모델의 크기·gzip·SHA-256을 시작할 때마다 검증한다.
 
 ```bash
 KATAGOMO_ENGINE=/absolute/path/to/katago \
@@ -86,7 +88,17 @@ KATAGOMO_MODEL=/absolute/path/to/zhizi_renju28b_s1600.bin.gz \
 make smoke
 ```
 
-`make dev`는 검증된 OpenCL 실행 파일이 있으면 이를 우선하고, 없으면 CPU/Eigen으로 내려간다. 종료는 실행 중인 터미널에서 `Ctrl-C`를 누른다. 서버가 끝날 때 analysis 자식 프로세스에도 terminate/EOF를 보내고 제한 시간 뒤에만 강제 종료한다.
+| 환경변수 | 기본값/용도 |
+|---|---|
+| `KATAGOMO_ENGINE` | OpenCL 빌드가 있으면 이를 사용하고, 없으면 `build/engine-eigen/katago` |
+| `KATAGOMO_MODEL` | `models/zhizi_renju28b_s1600.bin.gz` |
+| `KATAGOMO_ANALYSIS_CONFIG` | 선택한 backend의 `config/analysis*.cfg` |
+| `KATAGOMO_FORBIDDEN_HELPER` | `build/forbidden-helper/forbidden_helper` |
+| `KATAGOMO_ENGINE_LOG` | `artifacts/stage2/engine-stderr.log` |
+| `KATAGOMO_PORT` | 서버 포트 `8000` |
+| `KATAGOMO_WEBSOCKET_URL` | smoke에서 쓸 전체 WebSocket URL; 생략하면 `KATAGOMO_PORT`를 따른다 |
+
+`make dev`는 정식 `build/engine-opencl/katago`가 있으면 이를 우선하고, 없으면 CPU/Eigen으로 내려간다. 종료는 실행 중인 터미널에서 `Ctrl-C`를 누른다. 서버가 끝날 때 analysis 자식 프로세스에도 terminate/EOF를 보내고 제한 시간 뒤에만 강제 종료한다.
 
 CPU/Eigen을 명시적으로 선택하려면 두 경로를 함께 지정한다.
 
@@ -323,7 +335,9 @@ printf '%s\n' '{"moves":[],"nextPlayer":"B"}' | build/forbidden-helper/forbidden
 
 fixture는 RIF/RenjuNet의 [공식 규칙](https://www.renju.net/rifrules/), [고급 교육 자료](https://www.renju.net/advanced/), [금수 도해](https://www.renju.net/upload/staticfiles/forbiddens.jpg)에 근거한다. 첫 네 사례는 도표의 국소 패턴을 KataGomo 좌표로 정규화·분리하고 교대 수순용 비간섭 filler를 더한 것이다. 백 미적용과 빈 판 H8은 각각 RIF §9.2와 §4.2에서 도출한 불변조건이다. 이 변환 내역은 각 fixture의 `provenance`에 기록했다. 장목, 4×4, 3×3, 가짜 열린 3, 백 미적용, 빈 판 일반 합법 수가 모두 통과한다. 연습 UI에서도 해당 3×3 패턴의 `M5`가 표시되고 클릭이 차단되는 것을 실제 브라우저로 확인했다.
 
-## Stage 3 초반 반복 연습 UI
+## Stage 3–4 초반 반복 연습 UI와 채점
+
+Stage 3–4 결과는 루트 저장소 커밋 `8bf988b` (`checkpoint: complete opening practice UI`)에 보존했다. 모델, 빌드 산출물, 로그, `.venv`, `vendor/`는 이 체크포인트에도 포함하지 않았다.
 
 `make dev` 후 [http://127.0.0.1:8000](http://127.0.0.1:8000)에 접속한다. 기본 설정은 15×15 Renju, 흑 사용자, 14수 종료, 매 수 즉시 평가, 100 visits다.
 
@@ -377,24 +391,37 @@ make websocket-smoke      # 실제 OpenCL 서버 WebSocket 검증
 make compare-visits
 ```
 
-단위/프로세스 테스트는 좌표 왕복, 수순 스키마, JSON Lines, 분할된 JSON stream, visit share, BLACK→현재 차례/백 사용자 승률, cancel, supersede 및 stale 무시, 엔진 종료·1회 재시작, policy 226, 단일 WebSocket 세션, 금수 helper를 다룬다. Stage 3 테스트는 6~16수 경계와 기본 14수, policy/visit 순위, 추천 대비 signed gap, 분석 부족, 불법·PASS·중복 후보 거부, REST/WS request identity, NaN/Infinity JSON 오류 처리를 추가로 검증한다. 실제 통합 테스트는 mock이 아니라 Eigen 엔진과 공식 모델로 `B H8, W H9`를 분석한 뒤 실제 추천 수를 한 수 더 놓고 다시 분석한다. 중간/최종 응답과 prior/visits/winrate/PV/policy를 확인하고, 공식 helper의 legalMoves와 두 실제 분석으로 Stage 3 수별 평가까지 생성한다.
+단위/프로세스 테스트는 좌표 왕복, 수순 스키마, JSON Lines, 분할된 JSON stream, visit share, BLACK→현재 차례/백 사용자 승률, cancel, supersede 및 stale 무시, 엔진 종료·1회 재시작, policy 226, 단일 WebSocket 세션, 금수 helper를 다룬다. Stage 3–4 테스트는 6~16수 경계와 기본 14수, policy/visit 순위, 추천 대비 signed gap, 분석 부족, 불법·PASS·중복 후보 거부, REST/WS request identity, NaN/Infinity JSON 오류 처리를 추가로 검증한다. 실제 통합 테스트는 mock이 아니라 Eigen 엔진과 공식 모델로 `B H8, W H9`를 분석한 뒤 실제 추천 수를 한 수 더 놓고 다시 분석한다. 중간/최종 응답과 prior/visits/winrate/PV/policy를 확인하고, 공식 helper의 legalMoves와 두 실제 분석으로 Stage 4 수별 평가까지 생성한다.
 
-2026-08-31의 최종 회귀 결과는 `make test` **69 passed, 1 deselected**, `make integration-test` **1 passed, 69 deselected**다. 실제 OpenCL `make websocket-smoke`는 500 visits에서 **중간 응답 11개, 최종 응답 1개, policy 226개, 후보 17개**와 Stage 3 request identity echo를 검증했다. 먼저 잘못된 수순에 JSON `validation_error`를 받고 같은 연결에서 분석이 계속되는 것도 확인한다. 중간 응답 개수와 후보 배분은 실행 스케줄링에 따라 달라진다.
+2026-08-31의 최종 회귀 결과는 `make test` **69 passed, 1 deselected**, `make integration-test` **1 passed, 69 deselected**다. 실제 OpenCL `make websocket-smoke`는 500 visits에서 **중간 응답 11개, 최종 응답 1개, policy 226개, 후보 17개**와 Stage 3–4 request identity echo를 검증했다. 먼저 잘못된 수순에 JSON `validation_error`를 받고 같은 연결에서 분석이 계속되는 것도 확인한다. 중간 응답 개수와 후보 배분은 실행 스케줄링에 따라 달라진다.
 
 같은 날 실제 Apple M5 OpenCL 엔진과 공식 모델을 띄운 브라우저에서 기본 14수 흑 연습을 완주했다. AI 7수 자동 착수, 사용자 7수 평가, 수별 policy/visit/승률, 자동 종료, 결과표, 완료 후 추가 착수 차단, localStorage 1판 저장과 새로고침 후 복원을 확인했다. 모든 사용자 수는 분석 부족 없이 실제 서버 평가를 받았다. 백 연습에서는 빈 판에서 AI가 흑을 먼저 놓고 사용자 백 차례로 전환되는 것을 확인했다. 브라우저 console error는 없었다.
 
+## Stage 5 실행·인계 검증
+
+체크포인트에서 다시 `make setup`, `make source`, `make verify-model`, `make engine`, `make forbidden-helper`, `make smoke`, `make test`, `make integration-test`를 순서대로 실행해 통과시켰다. setup은 현재 설치된 Homebrew 도구와 CPython 3.14.6 `.venv`를 재사용했고 새 Python을 설치하지 않았다. CPU smoke와 통합 테스트는 공식 모델의 실제 분석 결과만 사용했다.
+
+`make dev`는 시작 전에 선택된 engine/model/config/helper를 명시하고 누락된 준비 명령을 알려준다. 실험용 `opencl-probe`는 자동 선택하지 않으며, 정식 `build/engine-opencl/katago`가 없으면 Eigen으로 내려간다. 서버는 UI와 API를 한 프로세스에서 제공하며 `Ctrl-C` 때 persistent analysis 자식 프로세스까지 정리한다.
+
+외부 경로로 지정한 동일 공식 모델과 CPU/Eigen, `KATAGOMO_PORT=8011` 조합으로도 서버를 실제 기동했다. 화면에서 engine ready, WebSocket 연결, 15×15 보드와 공식 helper 상태를 확인했다. 같은 포트의 500-visits WebSocket smoke는 중간 응답 44개, 최종 응답 1개, policy 226개, 후보 17개를 반환했고, 종료 로그의 `All cleaned up, quitting`까지 확인했다. 응답 횟수와 후보 visits 배분은 재실행 때 달라질 수 있다.
+
+환경변수로 backend를 강제하지 않은 기본 `make dev`도 별도 포트에서 재실행했다. `/api/status`는 Apple M5 OpenCL 1.2 장치, 공식 `renju28b-b28c512nbt` 모델, engine `ready`, helper available, Python 3.14.6을 보고했고 종료도 정상 완료됐다.
+
+브라우저 E2E 전용 테스트 러너는 아직 없다. 14수 자동 종료, 흑/백 연습, 결과표, localStorage 복원, 금수 표시·클릭 차단과 PV 상호작용은 실제 브라우저 검증으로 보완했고, Python 단위/통합 테스트와 실제 WebSocket smoke를 별도로 유지한다.
+
 ## 문제 해결
 
-- 모델: `make verify-model`로 크기, SHA-256, gzip 및 헤더를 다시 확인한다.
+- 모델: `make verify-model`로 크기, SHA-256과 gzip stream을 다시 확인한다. 실제 모델 구조 로딩은 `make smoke`로 확인한다.
 - helper 누락: `make forbidden-helper`를 실행한다. helper 오류 중에는 UI 착수를 안전하게 차단한다.
 - OpenCL 첫 시작: autotune 때문에 약 40초 걸릴 수 있다. 제한된 sandbox에서 장치 열거가 실패하면 일반 Terminal에서 실행한다.
 - OpenCL 실패: 위의 `KATAGOMO_ENGINE`/`KATAGOMO_ANALYSIS_CONFIG` 예제로 Eigen을 강제한다.
-- 엔진 로그: `artifacts/stage2/engine-stderr.log`와 `engine-invalid-stdout.log`를 확인한다.
+- 엔진 로그: `artifacts/stage2/engine-stderr.log`와 `artifacts/stage2/engine-invalid-stdout.log`를 확인한다.
 - 포트 충돌: `KATAGOMO_PORT=8001 make dev`처럼 바꾼다.
+- 사용자 지정 포트 smoke: 같은 `KATAGOMO_PORT=8001 make websocket-smoke`를 사용하거나 `KATAGOMO_WEBSOCKET_URL`을 직접 지정한다.
 
 오류 때 가짜 분석값이나 Python 금수 구현으로 대체하지 않는다.
 
-## Stage 3에서 확정한 선택과 다음 결정
+## Stage 3–4에서 확정한 선택과 다음 결정
 
 - 기본 100 visits, 선택 500 visits로 두었다. Apple M5 OpenCL에서는 100이 실시간 연습에 충분히 반응성이 좋다.
 - `분석 부족` 하한은 candidate/pre/post 기준 50 visits다. 이는 신뢰도 보증 수치가 아니라 지나치게 작은 검색을 확정적으로 표현하지 않기 위한 UI 경계다.
@@ -410,7 +437,7 @@ make compare-visits
 config/                         CPU/OpenCL analysis 및 benchmark 설정
 native/forbidden_helper/        공식 Board::isForbidden() 호출 어댑터
 server/                         FastAPI, persistent engine, 변환/legality/채점
-web/                            Stage 3 초반 반복 연습 UI
+web/                            Stage 3–4 초반 반복 연습·채점 UI
 tests/                          단위·프로세스·실제 엔진 통합 테스트
 scripts/                        빌드, 실행, smoke, 후보 비교
 artifacts/stage1_5/opencl/      OpenCL 실검증 원문, Git 제외

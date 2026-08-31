@@ -7,12 +7,14 @@ setup:
 	$(MAKE) python-deps
 
 venv:
-	@python3 -c 'import sys; assert sys.version_info >= (3, 11), "Python 3.11 or newer is required"'
-	@if [ ! -x .venv/bin/python ]; then python3 -m venv .venv; fi
+	@if [ ! -x .venv/bin/python ]; then \
+		python3 -c 'import sys; assert sys.version_info >= (3, 11), "Python 3.11 or newer is required"'; \
+		python3 -m venv .venv; \
+	fi
 	@.venv/bin/python -c 'import sys; assert sys.version_info >= (3, 11); print(sys.version)'
 
 python-deps: venv
-	.venv/bin/python -m pip install -r requirements-dev.txt
+	.venv/bin/python -m pip install -r requirements-lock.txt
 
 source:
 	./scripts/fetch-engine.sh
@@ -45,9 +47,12 @@ dev:
 	./scripts/dev.sh
 
 test: forbidden-helper
+	@test -x .venv/bin/python || { echo "Missing .venv. Run: make setup" >&2; exit 1; }
 	.venv/bin/python -m pytest -m 'not integration'
 
-integration-test:
+integration-test: forbidden-helper verify-model
+	@test -x .venv/bin/python || { echo "Missing .venv. Run: make setup" >&2; exit 1; }
+	@test -x build/engine-eigen/katago || { echo "Missing CPU/Eigen engine. Run: make engine" >&2; exit 1; }
 	KATAGOMO_RUN_INTEGRATION=1 .venv/bin/python -m pytest -m integration
 
 compare-visits:

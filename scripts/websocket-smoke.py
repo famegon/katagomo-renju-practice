@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import os
 from pathlib import Path
 
 from websockets.asyncio.client import connect
@@ -12,7 +13,11 @@ async def main() -> None:
     output_path = Path("artifacts/stage3/websocket-response.jsonl")
     output_path.parent.mkdir(parents=True, exist_ok=True)
     responses: list[dict] = []
-    async with connect("ws://127.0.0.1:8000/ws/analysis") as websocket:
+    websocket_url = os.environ.get(
+        "KATAGOMO_WEBSOCKET_URL",
+        f"ws://127.0.0.1:{os.environ.get('KATAGOMO_PORT', '8000')}/ws/analysis",
+    )
+    async with connect(websocket_url) as websocket:
         responses.append(json.loads(await websocket.recv()))
         await websocket.send(
             json.dumps(
@@ -109,6 +114,7 @@ async def main() -> None:
         json.dumps(
             {
                 "output": str(output_path),
+                "websocketUrl": websocket_url,
                 "partialResponses": partial_count,
                 "finalResponses": final_count,
                 "policyLength": final["policyLength"],
