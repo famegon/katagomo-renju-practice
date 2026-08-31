@@ -1,0 +1,14 @@
+{
+  "file": "zhizi_renju28b_s1600.bin.gz",
+  "sourceRelease": "https://github.com/hzyhhzy/KataGomo/releases/tag/Gomoku_20250206",
+  "sourceAsset": "https://github.com/hzyhhzy/KataGomo/releases/download/Gomoku_20250206/zhizi_renju28b_s1600.bin.gz",
+  "releaseTargetCommit": "9cb3546a8107ff0547def7d9d9a367de6c997355",
+  "sizeBytes": 269873929,
+  "sha256": "5aa1381aa37ba1b724469c5c8df3b59177079f5c57b355856e144b8146581f6f",
+  "sha256Provenance": "Computed locally after download; the GitHub release asset does not publish a digest.",
+  "gzipOriginalName": "model.bin",
+  "gzipUncompressedSizeBytes": 291522074,
+  "engineModelVersion": 102,
+  "engineModelName": "zhizigo_renju28b-b28c512nbt-s1617930240-d2051476833",
+  "verifiedAt": "2026-08-31T13:05:19+09:00"
+}

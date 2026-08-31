@@ -1,0 +1,1 @@
+{"id":"stage1-renju-100","moves":[["B","H8"],["W","H9"]],"rules":{"basicrule":"RENJU","vcnrule":"NOVC","firstpasswin":false,"maxmoves":0},"boardXSize":15,"boardYSize":15,"maxVisits":100,"analysisPVLen":8,"includePolicy":true,"reportDuringSearchEvery":1.0,"overrideSettings":{"reportAnalysisWinratesAs":"BLACK","wideRootNoise":0.0,"rootSymmetryPruning":false}}

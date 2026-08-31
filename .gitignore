@@ -1,0 +1,32 @@
+# Downloaded neural-network weights
+models/*
+!models/.gitkeep
+!models/MANIFEST.json
+
+# Native build output
+build/
+
+# Engine/runtime logs and generated output
+artifacts/
+logs/
+analysis_logs/
+gtp_logs/
+*.log
+
+# Local overrides and secrets
+.env
+.env.*
+!.env.example
+
+# Python and Node artifacts
+.venv/
+__pycache__/
+*.py[cod]
+node_modules/
+dist/
+
+# macOS metadata
+.DS_Store
+
+# Vendored official engine clone is reproduced by setup commands.
+vendor/KataGomo/
