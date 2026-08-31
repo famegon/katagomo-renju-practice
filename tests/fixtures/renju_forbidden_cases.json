@@ -1,0 +1,57 @@
+{
+  "sources": {
+    "rifRules": "https://www.renju.net/rifrules/",
+    "renjuNetEducation": "https://www.renju.net/advanced/",
+    "forbiddenDiagram": "https://www.renju.net/upload/staticfiles/forbiddens.jpg"
+  },
+  "cases": [
+    {
+      "name": "overline",
+      "provenance": "RenjuNet forbiddens.jpg central Y cluster; diagram origin normalized to A15, split to an independent board, remote white fillers added only for alternation",
+      "moves": [["B","E8"],["W","A1"],["B","F8"],["W","C1"],["B","H8"],["W","E1"],["B","J8"],["W","A3"],["B","K8"],["W","C3"]],
+      "nextPlayer": "B",
+      "mustBeForbidden": ["G8"],
+      "mustBeLegal": []
+    },
+    {
+      "name": "double-four",
+      "provenance": "RenjuNet forbiddens.jpg upper-left Y cluster; diagram origin normalized to A15, split to an independent board, remote white fillers added only for alternation",
+      "moves": [["B","A10"],["W","E10"],["B","B11"],["W","H1"],["B","C12"],["W","K1"],["B","E13"],["W","N1"],["B","E12"],["W","H3"],["B","E11"],["W","K3"]],
+      "nextPlayer": "B",
+      "mustBeForbidden": ["E14"],
+      "mustBeLegal": []
+    },
+    {
+      "name": "double-three",
+      "provenance": "RenjuNet forbiddens.jpg lower-right Y cluster; diagram origin normalized to A15, split to an independent board, remote white fillers added only for alternation",
+      "moves": [["B","L4"],["W","A15"],["B","M4"],["W","C15"],["B","K3"],["W","E15"],["B","M3"],["W","G15"]],
+      "nextPlayer": "B",
+      "mustBeForbidden": ["M5"],
+      "mustBeLegal": []
+    },
+    {
+      "name": "fake-open-three",
+      "provenance": "RenjuNet forbiddens.jpg lower-left Z cluster and Advanced Tutorial explanation that Z is not 3x3; diagram origin normalized to A15, remote white fillers added only for alternation",
+      "moves": [["B","B4"],["W","L15"],["B","B3"],["W","N15"],["B","D3"],["W","P15"],["B","D2"],["W","L13"]],
+      "nextPlayer": "B",
+      "mustBeForbidden": [],
+      "mustBeLegal": ["C3"]
+    },
+    {
+      "name": "white-does-not-use-black-forbidden-rule",
+      "provenance": "Color-swapped lower-right 3x3 geometry used as an invariant derived from RIF rule 9.2, which applies forbidden-point loss only to black",
+      "moves": [["B","A15"],["W","L4"],["B","C15"],["W","M4"],["B","E15"],["W","K3"],["B","G15"],["W","M3"],["B","J15"]],
+      "nextPlayer": "W",
+      "mustBeForbidden": [],
+      "mustBeLegal": ["M5"]
+    },
+    {
+      "name": "ordinary-empty-board",
+      "provenance": "Baseline invariant derived from RIF rule 4.2; H8 is the 15x15 center under KataGomo coordinates",
+      "moves": [],
+      "nextPlayer": "B",
+      "mustBeForbidden": [],
+      "mustBeLegal": ["H8"]
+    }
+  ]
+}

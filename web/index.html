@@ -1,0 +1,104 @@
+<!doctype html>
+<html lang="ko">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>KataGomo 진단 보드</title>
+    <link rel="stylesheet" href="/static/styles.css" />
+  </head>
+  <body>
+    <main>
+      <header>
+        <div>
+          <p class="eyebrow">Stage 2 · 실제 엔진 데이터</p>
+          <h1>KataGomo Renju 진단 보드</h1>
+        </div>
+        <div class="status-cluster">
+          <span id="engine-status" class="status">엔진 확인 중</span>
+          <span id="analysis-status" class="status neutral">분석 대기</span>
+        </div>
+      </header>
+
+      <section class="workspace">
+        <div class="board-panel">
+          <canvas id="board" width="760" height="760" aria-label="15×15 오목판"></canvas>
+          <p id="legality-status" class="notice">금수 정보를 확인 중입니다.</p>
+        </div>
+
+        <aside>
+          <section class="controls card">
+            <div class="field-row">
+              <label>다음 차례 <strong id="next-player">흑</strong></label>
+              <label>
+                Visits
+                <select id="max-visits">
+                  <option value="100" selected>100</option>
+                  <option value="500">500</option>
+                </select>
+              </label>
+              <label>
+                사용자 색
+                <select id="user-color">
+                  <option value="B" selected>흑</option>
+                  <option value="W">백</option>
+                </select>
+              </label>
+            </div>
+            <div class="button-row">
+              <button id="analyze" class="primary">분석 시작</button>
+              <button id="cancel">취소</button>
+              <button id="undo">무르기</button>
+              <button id="reset">초기화</button>
+            </div>
+          </section>
+
+          <section class="card">
+            <div class="section-heading">
+              <h2>MCTS 상위 후보 5개</h2>
+              <span>승률은 항상 흑 관점</span>
+            </div>
+            <div class="table-wrap">
+              <table>
+                <thead>
+                  <tr>
+                    <th>수</th>
+                    <th>Raw policy</th>
+                    <th>Visits</th>
+                    <th>Visit share</th>
+                    <th>흑 승률</th>
+                    <th>PV</th>
+                  </tr>
+                </thead>
+                <tbody id="candidates">
+                  <tr><td colspan="6" class="empty">분석 결과 없음</td></tr>
+                </tbody>
+              </table>
+            </div>
+          </section>
+
+          <section class="card">
+            <div class="section-heading">
+              <h2>Raw policy 상위 5개</h2>
+              <span>MCTS visits와 별도 표시</span>
+            </div>
+            <ol id="raw-policy" class="policy-list">
+              <li>분석 결과 없음</li>
+            </ol>
+          </section>
+
+          <section class="card details">
+            <h2>프로토콜 상태</h2>
+            <dl>
+              <div><dt>Request ID</dt><dd id="request-id">—</dd></div>
+              <div><dt>Policy 길이</dt><dd id="policy-length">—</dd></div>
+              <div><dt>후보 visits 합</dt><dd id="visit-total">—</dd></div>
+              <div><dt>응답</dt><dd id="response-kind">—</dd></div>
+            </dl>
+          </section>
+        </aside>
+      </section>
+    </main>
+    <script type="module" src="/static/app.js"></script>
+  </body>
+</html>
+

@@ -1,0 +1,2 @@
+"""Local KataGomo analysis server."""
+
