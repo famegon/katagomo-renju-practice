@@ -20,6 +20,12 @@ test("candidate hit testing distinguishes circles, labels, and empty board space
   // J8's circle overlaps H8's label, and the visible circle wins.
   assert.deepEqual(candidateHitAtPoint(areas, { x: 145, y: 100 }), { kind: "circle", move: "J8" });
 });
+
+test("candidate circles remain interactive when progressive labels are hidden", () => {
+  const areas = [{ move: "G8", px: 40, py: 40, radius: 12, box: null }];
+  assert.deepEqual(candidateHitAtPoint(areas, { x: 40, y: 40 }), { kind: "circle", move: "G8" });
+  assert.equal(candidateHitAtPoint(areas, { x: 80, y: 80 }), null);
+});
 test("candidate labels never fall through to a covered intersection", () => {
   const labelHit = { kind: "label", move: "H8" };
   assert.deepEqual(resolveBoardPointerIntent({

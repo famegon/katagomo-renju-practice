@@ -37,6 +37,31 @@ test("public UI states the fixed product scope without internal stage language",
   assert.equal(matches(/\bid=["']rules["']/g, html).length, 0, "Renju is not user-selectable");
 });
 
+test("the renewed desktop UI consolidates tools into one accessible workbench", () => {
+  for (const id of [
+    "workbench", "workbench-tab-analysis", "workbench-tab-comparison", "workbench-tab-history",
+    "workbench-panel-analysis", "workbench-panel-history", "analysis-view-tab-mcts",
+    "analysis-view-tab-policy", "analysis-view-mcts", "analysis-view-policy", "comparison-glance",
+  ]) {
+    assert.match(html, new RegExp(`id="${id}"`));
+  }
+  assert.match(html, /role="tablist" aria-label="작업대 보기"/);
+  assert.match(html, /id="workbench-tab-analysis" role="tab"[^>]*aria-selected="true"[^>]*aria-controls="workbench-panel-analysis"/);
+  assert.match(html, /id="comparison-card" class="workbench-panel comparison-panel" role="tabpanel"/);
+  assert.match(html, /id="candidate-focus-card" class="board-pv-rail"/);
+  assert.match(html, /<details class="comparison-details"><summary>전체 기술 지표<\/summary>/);
+  assert.match(html, /<details class="result-details"><summary>전체 수별 평가<\/summary>/);
+  const classNames = matches(/\bclass="([^"]+)"/g, html).flatMap((value) => value.split(/\s+/));
+  assert.equal(classNames.includes("card"), false, "standalone card surfaces must not return");
+
+  const header = html.match(/<header class="app-header">[\s\S]*?<\/header>/)?.[0] || "";
+  assert.match(header, /id="engine-status"/);
+  assert.doesNotMatch(header, /id="analysis-status"|id="practice-phase"/);
+  assert.match(app, /from "\.\/workbench-state\.mjs"/);
+  assert.match(app, /decision\.effect === "block-running-comparison"/);
+  assert.match(app, /decision\.effect === "clear-comparison"/);
+});
+
 test("candidate table and glossary preserve standard KataGomo terminology", () => {
   for (const term of [
     "Order", "Move", "Raw policy", "Visits", "Visit share", "Winrate (Black)", "PV",
@@ -110,6 +135,9 @@ test("WebSocket routing and board hit decisions come from executable pure module
   assert.match(app, /if \(comparisonIsSelecting\(\)\) \{[\s\S]*?chooseComparisonMove/);
   assert.match(app, /elements\.cancel\.addEventListener\("click", \(\) => \{\s*if \(comparisonUi\.mode === "running"\) \{\s*cancelComparisonRun\(\);\s*return;/);
   assert.match(app, /if \(analysisIsLive\(\)\) \{\s*cancelAnalysis\(\);\s*discardIncompleteAnalysis\("취소됨 · 부분 결과 폐기"\);/);
+  const suppressedCancel = app.indexOf("suppressedComparisonCancelIds.has(message.clientRequestId)");
+  assert.ok(suppressedCancel >= 0 && suppressedCancel < genericRoute,
+    "a canceled comparison status must not overwrite the underlying live-analysis display");
 });
 
 test("streaming candidate rerenders preserve keyboard focus by move without scrolling", () => {

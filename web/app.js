@@ -62,6 +62,15 @@ import {
   deriveComparisonResult,
   invalidateComparisonLab,
 } from "./comparison-lab.mjs";
+import {
+  ANALYSIS_VIEW_ORDER,
+  WORKBENCH_TAB_ORDER,
+  adjacentTab,
+  createWorkbenchState,
+  selectAnalysisView,
+  selectWorkbenchTab,
+  showsMctsBoardOverlay,
+} from "./workbench-state.mjs";
 
 const BOARD_SIZE = 15;
 const POLICY_LENGTH = 226;
@@ -135,6 +144,13 @@ const elements = {
   comparisonHeadingA: byId("comparison-heading-a"), comparisonHeadingB: byId("comparison-heading-b"),
   comparisonPreviewA: byId("comparison-preview-a"), comparisonPreviewB: byId("comparison-preview-b"),
   comparisonPreviewClear: byId("comparison-preview-clear"),
+  comparisonGlance: byId("comparison-glance"), practiceOptions: byId("practice-options"),
+  workbench: byId("workbench"), workbenchTabAnalysis: byId("workbench-tab-analysis"),
+  workbenchTabComparison: byId("workbench-tab-comparison"), workbenchTabHistory: byId("workbench-tab-history"),
+  workbenchPanelAnalysis: byId("workbench-panel-analysis"), workbenchPanelHistory: byId("workbench-panel-history"),
+  analysisViewTabMcts: byId("analysis-view-tab-mcts"), analysisViewTabPolicy: byId("analysis-view-tab-policy"),
+  analysisViewMcts: byId("analysis-view-mcts"), analysisViewPolicy: byId("analysis-view-policy"),
+  historyIndex: byId("history-index"),
 };
 
 let gameDocument = createGameDocument();
@@ -163,6 +179,8 @@ let reviewSession = null;
 let comparisonLab = null;
 let comparisonGeneration = 0;
 let comparisonUi = emptyComparisonUi();
+let workbenchUi = createWorkbenchState();
+const suppressedComparisonCancelIds = new Set();
 
 function emptyComparisonUi() {
   return {
@@ -174,6 +192,65 @@ function emptyComparisonUi() {
     anchor: null,
     error: null,
   };
+}
+
+const WORKBENCH_BUTTONS = Object.freeze({
+  analysis: elements.workbenchTabAnalysis,
+  comparison: elements.workbenchTabComparison,
+  history: elements.workbenchTabHistory,
+});
+const WORKBENCH_PANELS = Object.freeze({
+  analysis: elements.workbenchPanelAnalysis,
+  comparison: elements.comparisonCard,
+  history: elements.workbenchPanelHistory,
+});
+const ANALYSIS_VIEW_BUTTONS = Object.freeze({
+  mcts: elements.analysisViewTabMcts,
+  policy: elements.analysisViewTabPolicy,
+});
+const ANALYSIS_VIEW_PANELS = Object.freeze({
+  mcts: elements.analysisViewMcts,
+  policy: elements.analysisViewPolicy,
+});
+
+function renderWorkbenchNavigation() {
+  elements.workbench.dataset.activeTab = workbenchUi.tab;
+  for (const [tabName, button] of Object.entries(WORKBENCH_BUTTONS)) {
+    const selected = tabName === workbenchUi.tab;
+    button.setAttribute("aria-selected", String(selected));
+    button.tabIndex = selected ? 0 : -1;
+    WORKBENCH_PANELS[tabName].hidden = !selected;
+  }
+  for (const [viewName, button] of Object.entries(ANALYSIS_VIEW_BUTTONS)) {
+    const selected = viewName === workbenchUi.analysisView;
+    button.setAttribute("aria-selected", String(selected));
+    button.tabIndex = selected ? 0 : -1;
+    ANALYSIS_VIEW_PANELS[viewName].hidden = !selected;
+  }
+}
+
+function switchWorkbenchTab(tab, { focus = false } = {}) {
+  const decision = selectWorkbenchTab(workbenchUi, tab, { comparisonMode: comparisonUi.mode });
+  if (decision.effect === "block-running-comparison") {
+    notice("진행 중인 수 비교를 취소하거나 완료한 뒤 다른 탭으로 이동하세요.", true);
+    return false;
+  }
+  workbenchUi = decision.state;
+  if (decision.effect === "clear-comparison") {
+    clearComparison({ reason: "comparison-tab-left" });
+    notice("수 비교를 닫았습니다. 보드에서 계속 착수하거나 현재 위치를 분석할 수 있습니다.");
+  }
+  renderWorkbenchNavigation();
+  drawBoard();
+  if (focus) WORKBENCH_BUTTONS[workbenchUi.tab].focus();
+  return true;
+}
+
+function switchAnalysisView(view, { focus = false } = {}) {
+  workbenchUi = selectAnalysisView(workbenchUi, view);
+  renderWorkbenchNavigation();
+  drawBoard();
+  if (focus) ANALYSIS_VIEW_BUTTONS[workbenchUi.analysisView].focus();
 }
 
 function emptyPractice(token = 0) {
@@ -379,6 +456,8 @@ function updateModeUi() {
   for (const element of [elements.userColorSetting, elements.stopPlySetting, elements.gradingModeSetting]) {
     element.hidden = freeAnalysis;
   }
+  elements.practiceOptions.hidden = freeAnalysis;
+  if (freeAnalysis) elements.practiceOptions.open = false;
   elements.userWinrateRow.hidden = freeAnalysis;
   elements.modeHelp.textContent = freeAnalysis
     ? "사용자 색과 AI 자동 착수 없이 흑·백을 번갈아 직접 둡니다. 각 위치에서 ‘현재 위치 분석’을 누르세요."
@@ -417,9 +496,11 @@ function drawBoard() {
   if (comparisonIsOpen()) {
     candidateHitAreas = [];
     drawComparisonOverlay();
-  } else {
+  } else if (showsMctsBoardOverlay(workbenchUi)) {
     drawPv();
     drawCandidateOverlays();
+  } else {
+    candidateHitAreas = [];
   }
 
   gameDocument.moves.forEach(([player, move], index) => {
@@ -560,22 +641,25 @@ function drawCandidateOverlays() {
     context.font = "bold 12px -apple-system, sans-serif";
     context.fillText(orderLabel, px, py);
 
-    const box = findLabelBox(px, py, labelBoxes, index);
-    labelBoxes.push(box);
-    context.fillStyle = first ? "rgba(14,70,54,.93)" : "rgba(255,255,255,.94)";
-    context.strokeStyle = first ? "#f4ce68" : "rgba(20,93,72,.65)";
-    context.lineWidth = 1;
-    context.fillRect(box.x, box.y, box.width, box.height);
-    context.strokeRect(box.x, box.y, box.width, box.height);
-    context.textAlign = "left";
-    context.fillStyle = first ? "white" : "#173f33";
-    context.font = "bold 10px ui-monospace, monospace";
-    context.fillText(`${candidate.move}  Order ${orderLabel}`, box.x + 4, box.y + 9);
-    context.font = "10px ui-monospace, monospace";
-    context.fillText(`Visits ${percent(candidate.visitShare)}`, box.x + 4, box.y + 22);
-    context.fillText(`Policy ${percent(candidate.rawPrior)}`, box.x + 4, box.y + 35);
-    context.fillText(`Black ${percent(candidate.blackWinrate)}`, box.x + 4, box.y + 48);
-    context.textAlign = "center";
+    let box = null;
+    if (first || focused) {
+      box = findLabelBox(px, py, labelBoxes, index);
+      labelBoxes.push(box);
+      context.fillStyle = first ? "rgba(14,70,54,.93)" : "rgba(255,255,255,.94)";
+      context.strokeStyle = first ? "#f4ce68" : "rgba(20,93,72,.65)";
+      context.lineWidth = 1;
+      context.fillRect(box.x, box.y, box.width, box.height);
+      context.strokeRect(box.x, box.y, box.width, box.height);
+      context.textAlign = "left";
+      context.fillStyle = first ? "white" : "#173f33";
+      context.font = "bold 10px ui-monospace, monospace";
+      context.fillText(`${candidate.move}  Order ${orderLabel}`, box.x + 4, box.y + 9);
+      context.font = "10px ui-monospace, monospace";
+      context.fillText(`Visits ${percent(candidate.visitShare)}`, box.x + 4, box.y + 22);
+      context.fillText(`Policy ${percent(candidate.rawPrior)}`, box.x + 4, box.y + 35);
+      context.fillText(`Black ${percent(candidate.blackWinrate)}`, box.x + 4, box.y + 48);
+      context.textAlign = "center";
+    }
     candidateHitAreas.push({ move: candidate.move, px, py, radius: Math.max(radius, 18), box });
   });
 }
@@ -851,6 +935,11 @@ function handleComparisonMessage(message) {
 
 function handleMessage(message) {
   if (message?.engine) updateEngineBadge(message.engine);
+  if (message?.type === "status" && message.status === "canceled"
+    && suppressedComparisonCancelIds.has(message.clientRequestId)) {
+    suppressedComparisonCancelIds.delete(message.clientRequestId);
+    return;
+  }
   if (analysisContext?.owner === "comparison" && handleComparisonMessage(message)) return;
   const decision = decideWebSocketMessage({
     message,
@@ -1117,8 +1206,19 @@ function discardIncompleteAnalysis(responseKind) {
   elements.responseKind.textContent = responseKind;
 }
 
+function restoreUnderlyingAnalysisStatus() {
+  if (currentAnalysis?.isFinal) {
+    const insufficient = currentAnalysis.analysisInsufficient === true;
+    elements.responseKind.textContent = "최종";
+    setAnalysisStatus(insufficient ? "최종 · 분석 부족" : "최종 결과", insufficient ? "insufficient" : "");
+    return;
+  }
+  setAnalysisStatus("분석 대기", "neutral");
+}
+
 function setComparisonStatus(text, tone = "") {
   elements.comparisonStatus.textContent = text;
+  elements.comparisonStatus.hidden = !text;
   elements.comparisonStatus.className = `comparison-status${tone ? ` ${tone}` : ""}`;
 }
 
@@ -1187,6 +1287,30 @@ function comparisonConclusion(result) {
   return `${playerName(result.player)} 착수자 관점: A ${percent(aMover)} · B ${percent(bMover)}. ${comparisonText}${insufficient ? " 분석량이 적어 탐색 추정으로만 보세요." : ""}`;
 }
 
+function comparisonGlanceMarkup(branch) {
+  const policy = branch.baseRawPolicy === null
+    ? "—"
+    : `${policyPercent(branch.baseRawPolicy)}${branch.basePolicyRank === null ? "" : ` · #${branch.basePolicyRank}`}`;
+  const mcts = branch.baseMctsOrder === null
+    ? "후보 미반환"
+    : `Order ${branch.baseMctsOrder}${branch.baseVisitShare === null ? "" : ` · ${percent(branch.baseVisitShare)}`}`;
+  const winrate = branch.resultKind === "terminal"
+    ? `${terminalOutcomeText(branch.terminalOutcome)} · MCTS 미실행`
+    : percent(branch.afterBlackWinrate);
+  const reply = branch.resultKind === "terminal"
+    ? "종국 · 응수 없음"
+    : branch.opponentOrder0Move ? `Order 0 · ${branch.opponentOrder0Move}` : "후보 미반환";
+  return `<article class="comparison-glance-branch">
+    <h4>${escapeHtml(branch.label)} · ${escapeHtml(branch.move)}</h4>
+    <dl>
+      <div><dt>Raw policy</dt><dd>${escapeHtml(policy)}</dd></div>
+      <div><dt>MCTS</dt><dd>${escapeHtml(mcts)}</dd></div>
+      <div><dt>Winrate (Black)</dt><dd>${escapeHtml(winrate)}</dd></div>
+      <div><dt>상대 최선 응수</dt><dd>${escapeHtml(reply)}</dd></div>
+    </dl>
+  </article>`;
+}
+
 function renderComparisonResults(result) {
   const { a, b } = result.branches;
   elements.comparisonHeadingA.textContent = `수 A · ${a.move}`;
@@ -1211,6 +1335,7 @@ function renderComparisonResults(result) {
     <td>${comparisonBranchValue(b, metric)}</td>
   </tr>`).join("");
   elements.comparisonConclusion.textContent = comparisonConclusion(result);
+  elements.comparisonGlance.innerHTML = `${comparisonGlanceMarkup(a)}${comparisonGlanceMarkup(b)}`;
   elements.comparisonResults.hidden = false;
 }
 
@@ -1251,7 +1376,7 @@ function renderComparisonLab() {
     elements.comparisonProgress.classList.remove("error");
     elements.comparisonResults.hidden = true;
   } else if (comparisonUi.mode === "complete" && comparisonLab) {
-    setComparisonStatus("비교 완료");
+    setComparisonStatus("");
     elements.comparisonProgress.textContent = `기준 위치와 A/B를 각각 ${comparisonLab.maxVisits} visits로 순차 분석했습니다. 실제 Root visits는 아래에 그대로 표시합니다.`;
     elements.comparisonProgress.classList.remove("error");
     renderComparisonResults(deriveComparisonResult(comparisonLab));
@@ -1284,6 +1409,7 @@ function clearComparison({ reason = "comparison-closed", announce = false } = {}
   const ownedLiveRequest = analysisContext?.owner === "comparison" && analysisIsLive();
   comparisonGeneration += 1;
   if (ownedLiveRequest) {
+    if (analysisJob?.clientRequestId) suppressedComparisonCancelIds.add(analysisJob.clientRequestId);
     analysisJob = cancelAnalysisJob(analysisJob);
     send({ action: "cancel" });
   }
@@ -1291,7 +1417,7 @@ function clearComparison({ reason = "comparison-closed", announce = false } = {}
   comparisonLab = null;
   comparisonUi = emptyComparisonUi();
   if (analysisContext?.owner === "comparison") analysisContext = null;
-  if (ownedLiveRequest) setAnalysisStatus("비교 취소됨", "neutral");
+  if (wasOpen) restoreUnderlyingAnalysisStatus();
   renderComparisonLab();
   drawBoard();
   updateControls();
@@ -1305,6 +1431,7 @@ function openComparisonSelection() {
       : "진행 중인 AI 연습·복기를 마치고 금수 확인이 완료된 위치에서 비교할 수 있습니다.", true);
     return false;
   }
+  switchWorkbenchTab("comparison");
   if (analysisIsLive()) {
     cancelAnalysis();
     discardIncompleteAnalysis("취소됨 · 부분 결과 폐기");
@@ -1374,6 +1501,7 @@ function failComparison(message) {
   const ownedRunningRequest = analysisContext?.owner === "comparison"
     && comparisonLab?.status === "running";
   if (ownedRunningRequest) {
+    if (analysisJob?.clientRequestId) suppressedComparisonCancelIds.add(analysisJob.clientRequestId);
     if (analysisIsLive()) analysisJob = cancelAnalysisJob(analysisJob);
     if (socket?.readyState === WebSocket.OPEN) send({ action: "cancel" });
   }
@@ -1432,6 +1560,7 @@ function submitComparisonStage(generation = comparisonGeneration) {
 
 function runComparison() {
   if (!comparisonIsSelecting() || !comparisonUi.moveA || !comparisonUi.moveB) return false;
+  switchWorkbenchTab("comparison");
   if (!comparisonAnchorIsCurrent()) {
     clearComparison({ reason: "live-position-changed" });
     notice("판이 바뀌어 비교 선택을 취소했습니다. 다시 시작하세요.", true);
@@ -1468,6 +1597,7 @@ function cancelComparisonRun() {
   const ownedLiveRequest = analysisContext?.owner === "comparison" && analysisIsLive();
   comparisonGeneration += 1;
   if (ownedLiveRequest) {
+    if (analysisJob?.clientRequestId) suppressedComparisonCancelIds.add(analysisJob.clientRequestId);
     analysisJob = cancelAnalysisJob(analysisJob);
     send({ action: "cancel" });
   }
@@ -1475,7 +1605,7 @@ function cancelComparisonRun() {
   comparisonLab = null;
   comparisonUi = { ...comparisonUi, mode: "selecting", previewSlot: null, error: null };
   if (analysisContext?.owner === "comparison") analysisContext = null;
-  setAnalysisStatus("비교 취소됨", "neutral");
+  restoreUnderlyingAnalysisStatus();
   renderComparisonLab();
   drawBoard();
   updateControls();
@@ -1512,6 +1642,7 @@ function cancelAnalysis({ preservePractice = true } = {}) {
 }
 function requestAnalysis(purpose = "manual") {
   if (comparisonIsOpen()) clearComparison({ reason: "main-analysis-started" });
+  switchWorkbenchTab("analysis");
   if (gameDocument.positionState?.isTerminal) {
     notice(`${terminalResultLabel()} 위치는 이미 끝났으므로 분석을 시작하지 않습니다.`, true);
     return false;
@@ -1574,6 +1705,7 @@ async function startPractice(startMoves = null, { continuedFromPly = null } = {}
     return false;
   }
   if (comparisonIsOpen()) clearComparison({ reason: "practice-started" });
+  switchWorkbenchTab("analysis");
   cancelAnalysis({ preservePractice: false });
   if (startMoves) {
     gameDocument = replaceGameMoves(gameDocument, startMoves);
@@ -1943,6 +2075,7 @@ function visitRankComparison(record) {
 }
 
 function renderResults(summary) {
+  switchWorkbenchTab("history");
   elements.resultsCard.hidden = false;
   const attempt = practice.attempt;
   const records = attempt.turnRecords;
@@ -2126,7 +2259,9 @@ function openHistoryReview(id, ply = null) {
     return false;
   }
   if (analysisIsLive()) cancelAnalysis();
+  switchWorkbenchTab("history");
   reviewSession = createHistoryReview(record, ply ?? record.finalMoves.length);
+  elements.historyIndex.hidden = true;
   elements.reviewPanel.hidden = false;
   renderHistoryReview();
   updateControls();
@@ -2137,6 +2272,7 @@ function openHistoryReview(id, ply = null) {
 function closeHistoryReview() {
   reviewSession = null;
   elements.reviewPanel.hidden = true;
+  elements.historyIndex.hidden = false;
   updateControls();
 }
 
@@ -2350,6 +2486,7 @@ function updateControls() {
   updateModeUi();
   elements.practiceStart.textContent = practice.ended ? "현재 위치에서 새 연습" : "이 위치에서 연습 시작";
   elements.analyze.textContent = practice.active ? "현재 단계 재분석" : "현재 위치 분석";
+  elements.practiceFinish.hidden = !practice.active;
   elements.practiceFinish.disabled = !connected || engineState !== "ready" || !practice.active || busy
     || practice.phase !== "user_turn" || Boolean(practice.pendingRecord) || Boolean(aiTimer)
     || practice.attempt.turnRecords.length === 0 || Boolean(reviewSession);
@@ -2375,6 +2512,7 @@ function updateControls() {
   elements.sizeMetric.disabled = comparisonIsOpen();
   elements.topCount.disabled = comparisonIsOpen();
   elements.comparisonCard.classList.toggle("is-error", comparisonUi.mode === "error");
+  renderWorkbenchNavigation();
 }
 function canPlaceMove(view = currentViewState()) {
   if (comparisonIsOpen()) return false;
@@ -2456,6 +2594,7 @@ async function resetBoard() {
     return false;
   }
   if (comparisonIsOpen()) clearComparison({ reason: "board-reset" });
+  switchWorkbenchTab("analysis");
   cancelAnalysis({ preservePractice: false });
   practice = emptyPractice(practice.token + 1);
   gameDocument = replaceGameMoves(gameDocument, []);
@@ -2593,6 +2732,24 @@ elements.comparisonClear.addEventListener("click", () => clearComparison({ annou
 elements.comparisonPreviewA.addEventListener("click", () => previewComparison("a"));
 elements.comparisonPreviewB.addEventListener("click", () => previewComparison("b"));
 elements.comparisonPreviewClear.addEventListener("click", () => previewComparison(null));
+for (const [tabName, button] of Object.entries(WORKBENCH_BUTTONS)) {
+  button.addEventListener("click", () => switchWorkbenchTab(tabName));
+  button.addEventListener("keydown", (event) => {
+    if (!["ArrowLeft", "ArrowRight", "Home", "End"].includes(event.key)) return;
+    event.preventDefault();
+    const target = adjacentTab(tabName, event.key, WORKBENCH_TAB_ORDER);
+    switchWorkbenchTab(target, { focus: true });
+  });
+}
+for (const [viewName, button] of Object.entries(ANALYSIS_VIEW_BUTTONS)) {
+  button.addEventListener("click", () => switchAnalysisView(viewName));
+  button.addEventListener("keydown", (event) => {
+    if (!["ArrowLeft", "ArrowRight", "Home", "End"].includes(event.key)) return;
+    event.preventDefault();
+    const target = adjacentTab(viewName, event.key, ANALYSIS_VIEW_ORDER);
+    switchAnalysisView(target, { focus: true });
+  });
+}
 elements.summaryBody.addEventListener("click", (event) => {
   const row = event.target.closest("[data-ply]");
   if (row && practice.attempt?.sessionEpoch) openHistoryReview(practice.attempt.sessionEpoch, Number(row.dataset.ply));
@@ -2613,6 +2770,7 @@ elements.sizeMetric.addEventListener("change", drawBoard);
 elements.topCount.addEventListener("change", () => { renderCandidates(); renderRawPolicy(); drawBoard(); });
 elements.mode.addEventListener("change", () => {
   if (comparisonIsOpen()) clearComparison({ reason: "mode-changed" });
+  switchWorkbenchTab("analysis");
   cancelAnalysis();
   clearAnalysisDisplay();
   if (elements.mode.value === "analysis" && practice.ended) {
@@ -2704,6 +2862,7 @@ async function refreshTrainingOptions() {
 
 renderHistory();
 renderComparisonLab();
+renderWorkbenchNavigation();
 drawBoard();
 refreshLegality();
 connectWebSocket();

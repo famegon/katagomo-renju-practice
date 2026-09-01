@@ -2,6 +2,7 @@ function pointInCircle(point, area) {
   return Math.hypot(point.x - area.px, point.y - area.py) <= area.radius;
 }
 function pointInBox(point, box) {
+  if (!box) return false;
   return point.x >= box.x && point.x <= box.x + box.width
     && point.y >= box.y && point.y <= box.y + box.height;
 }

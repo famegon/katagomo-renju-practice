@@ -102,17 +102,19 @@ make dev
 
 앱에서 연습 방식과 분석량을 고르고 보드의 교차점을 누르면 된다. UI의 구체적인 배치는 바뀔 수 있지만 기능 계약은 다음과 같다.
 
+화면은 왼쪽 **Renju 보드**와 오른쪽 단일 **분석 작업대**로 구성된다. 작업대의 `분석 / 수 비교 / 기록` 탭은 한 번에 선택한 기능만 보여준다. 분석 탭 안에서는 `MCTS 후보 / Raw policy`를 전환하며, 기술 용어와 엔진 세부정보는 작업대 하단에서 필요할 때만 펼친다.
+
 - AI 연습에서는 흑 또는 백을 선택한다. AI는 최종 검색 결과의 `order=0` 후보만 자동 착수한다.
 - 양쪽 직접 두기에서는 AI 자동 착수와 사용자 색 채점을 끄고 두 색을 직접 둔다.
 - 기본 분석량은 100 visits이며 더 깊은 확인에는 500 visits를 선택할 수 있다.
-- 후보 수와 원 크기 기준을 바꾸어 Raw policy와 Visit share를 따로 비교할 수 있다.
+- MCTS 후보 보기에서 원 크기 기준을 Raw policy 또는 Visit share로 바꿀 수 있다. 보드에는 모든 후보의 Order 원을 남기고, 전체 지표 라벨은 Order 0과 현재 가리키거나 고정한 후보에만 표시한다.
 - 후보를 가리키거나 선택하면 PV 예상 수순을 보드에서 확인할 수 있다.
 - 흑 금수는 표시되고 클릭이 차단된다. KataGomo 금수 판정이 실패하면 임의 판정 대신 안전하게 착수와 분석을 막는다.
 - 수 제한에 도달하거나 공식 종국이 되면 결과와 수별 평가를 정리한다.
 
 ### 수 비교 실험실
 
-한 위치에서 “왜 A는 좋고 B는 나쁜가?”를 수치와 예상 응수로 확인하려면 **두 수 선택**을 누른다. 보드에서 A와 B를 고른 뒤 **같은 visits로 비교**를 실행한다. 선택 클릭은 가상 수만 지정하며 실제 수순에는 돌을 추가하지 않는다.
+한 위치에서 “왜 A는 좋고 B는 나쁜가?”를 수치와 예상 응수로 확인하려면 작업대의 **수 비교** 탭에서 **두 수 선택**을 누른다. 보드에서 A와 B를 고른 뒤 **같은 visits로 비교**를 실행한다. 선택 클릭은 가상 수만 지정하며 실제 수순에는 돌을 추가하지 않는다. 기본 결과는 Raw policy·MCTS·Winrate (Black)·상대 최선 응수만 먼저 보여주고, Root visits와 전체 원시 지표는 **전체 기술 지표**에서 펼쳐 본다.
 
 한 번의 비교는 같은 persistent 엔진에서 다음 순서로 실행된다.
 
@@ -255,7 +257,7 @@ make dev                  # 별도 터미널에서 유지
 make websocket-smoke
 ```
 
-> 최종 회귀 기록(2026-09-01): JavaScript 문법 검사와 웹 상태·저장·DOM 테스트 71 passed, Python 테스트 190 passed / 2 deselected, 실제 CPU/Eigen 엔진·공식 모델 통합 테스트 2 passed / 190 deselected.
+> 최종 회귀 기록(2026-09-01): JavaScript 문법 검사와 웹 상태·저장·DOM 테스트 79 passed, Python 테스트 190 passed / 2 deselected, 실제 CPU/Eigen 엔진·공식 모델 통합 테스트 2 passed / 190 deselected.
 
 ## 배포 파일과 라이선스
 
@@ -597,7 +599,7 @@ Order는 Visits 순위와 다를 수 있다. 보존된 CPU 비교에서 `G9`는 
 - 이전 UI 체크포인트의 실제 브라우저에서 14수 흑 연습, AI 7수 자동 착수, 사용자 7수 평가, 결과표, 완료 후 착수 차단, 당시 localStorage 저장·복원과 백 연습의 AI 선착수를 확인했다. 모든 사용자 수가 실제 서버 평가를 받았고 당시 console error는 없었다.
 - 같은 이전 체크포인트에서 14수 판을 제한 없음으로 이어 16수까지 실제 분석·AI 응수 후 직접 종료했고, 기존 14수와 새 16수 기록이 각각 보존됨을 확인했다.
 - 같은 이전 체크포인트에서 금수 3×3 fixture의 M5 표시와 클릭 차단을 실제 브라우저로 확인했다.
-- 2026-09-01 릴리스 후보는 Chrome에서 1180×800과 1440×900 데스크톱 레이아웃을 시각 점검했다. 실제 빈 보드 100 visits는 검색 중간 응답 뒤 Root visits 107로 끝났고, 양쪽 직접 두기에서 H8을 놓은 500 visits는 중간 응답 뒤 Root visits 507로 끝났다. 후자의 Winrate (Black) 97.0%가 백 차례 관점 3.0%로 변환됐으며 사용자 색/AI 자동 착수는 비활성화됐다. 후보 표 선택·PV, Raw policy 순위, 용어 설명 열기와 console error 0건도 확인했다.
+- 2026-09-01 데스크톱 리뉴얼은 Chrome에서 왼쪽 보드와 오른쪽 단일 작업대 구조를 시각 점검했다. 실제 빈 보드 100 visits 분석, MCTS/Raw policy 전환, 수 비교 선택·취소·완료·PV, 실행 중 탭 이탈 차단, 기록 목록/복기 전환을 확인했다. 비교 탭을 닫으면 가상 A/B 상태를 폐기하고 라이브 보드 착수를 다시 허용한다.
 - 같은 실행 서버의 500-visits WebSocket smoke는 중간 44개, 최종 1개, policy 226개, 후보 17개를 받았다. 실제 HTTP에서는 정상 loopback Host 200, 악성 Host 400, 악성 WebSocket Origin 403, 정적 자산 `Cache-Control: no-store`를 확인했다.
 
 주요 생성 원문은 `artifacts/stage1/analysis-response.jsonl`, `artifacts/stage2/integration-response.jsonl`, `artifacts/stage2/candidate-distribution/`, `artifacts/stage3/websocket-response.jsonl`, `artifacts/stage3/integration-training-response.jsonl`에 저장한다. 모두 재생성 가능한 로컬 산출물이므로 Git에서는 제외한다.

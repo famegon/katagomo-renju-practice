@@ -9,20 +9,18 @@
     <link rel="stylesheet" href="/static/styles.css" />
   </head>
   <body>
-    <main>
+    <main class="app-shell">
       <header class="app-header">
         <div class="brand-block">
-          <p class="eyebrow">KataGomo policy + MCTS</p>
-          <h1>KataGomo Renju Practice</h1>
-          <p class="subtitle">로컬 15×15 Renju 연습 플랫폼</p>
+          <span class="brand-mark" aria-hidden="true">KG</span>
+          <div>
+            <h1>KataGomo Renju Practice</h1>
+            <p class="subtitle">로컬 15×15 Renju 연습 플랫폼</p>
+          </div>
         </div>
         <div class="header-meta">
           <span class="scope-badge">15×15 · Renju · Local</span>
-          <div class="status-cluster" aria-live="polite">
-            <span id="engine-status" class="status">엔진 확인 중</span>
-            <span id="analysis-status" class="status neutral">연결 대기</span>
-            <span id="practice-phase" class="status neutral">설정 중</span>
-          </div>
+          <span id="engine-status" class="status">엔진 확인 중</span>
         </div>
       </header>
 
@@ -35,76 +33,86 @@
       </section>
 
       <section class="workspace">
-        <div class="board-column">
-          <section class="board-panel" aria-labelledby="board-heading">
-            <div class="board-heading-row">
-              <div>
-                <h2 id="board-heading">15×15 Renju 보드</h2>
-                <p>
-                  <strong id="next-player">흑</strong> 차례 ·
-                  <span id="ply-count">0수</span>
-                  <span id="turn-owner">· 설정 가능</span>
-                </p>
-              </div>
-              <span id="session-complete" class="session-flag" data-complete="false">진행 전</span>
+        <section class="board-panel" aria-labelledby="board-heading">
+          <div class="board-heading-row">
+            <div>
+              <h2 id="board-heading">Renju 보드</h2>
+              <p><strong id="next-player">흑</strong> 차례 · <span id="ply-count">0수</span> <span id="turn-owner">· 설정 가능</span></p>
             </div>
-            <canvas
-              id="board"
-              width="760"
-              height="760"
-              tabindex="0"
-              role="application"
-              aria-disabled="true"
-              aria-label="15×15 Renju 오목판. 방향키로 이동하고 Enter 또는 Space로 착수합니다."
-              aria-describedby="board-help board-summary"
-            ></canvas>
-            <p id="board-help" class="board-help">
-              교차점을 클릭해 착수합니다. 키보드는 방향키로 이동하고 Enter로 착수합니다.
-            </p>
-            <p id="board-summary" class="sr-only" aria-live="polite">빈 오목판, 흑 차례</p>
-            <div class="board-state">
-              <p id="legality-status" class="notice" aria-live="polite">금수 정보를 확인 중입니다.</p>
-              <p id="action-notice" class="notice action-notice" aria-live="polite"></p>
-            </div>
+            <span id="session-complete" class="session-flag" data-complete="false">진행 전</span>
+          </div>
+
+          <canvas id="board" width="760" height="760" tabindex="0" role="application" aria-disabled="true"
+            aria-label="15×15 Renju 오목판. 방향키로 이동하고 Enter 또는 Space로 착수합니다."
+            aria-describedby="board-help board-summary"></canvas>
+
+          <div class="board-command-bar">
+            <p id="board-help" class="board-help">교차점을 클릭해 착수합니다. 방향키로 이동하고 Enter로 둘 수도 있습니다.</p>
             <div class="button-row board-actions" aria-label="보드 동작">
-              <button id="undo" class="secondary" type="button">무르기</button>
-              <button id="reset" class="secondary" type="button">새 판</button>
+              <button id="undo" class="quiet-button" type="button">무르기</button>
+              <button id="reset" class="quiet-button" type="button">새 판</button>
             </div>
-          </section>
+          </div>
 
-          <section id="candidate-focus-card" class="card candidate-focus" aria-live="polite">
-            <div class="section-heading">
+          <p id="board-summary" class="sr-only" aria-live="polite">빈 오목판, 흑 차례</p>
+          <div class="board-state">
+            <p id="action-notice" class="notice action-notice" aria-live="polite"></p>
+            <p id="legality-status" class="notice" aria-live="polite">금수 정보를 확인 중입니다.</p>
+          </div>
+
+          <div id="candidate-focus-card" class="board-pv-rail" aria-live="polite">
+            <span class="rail-label">PV</span>
+            <p id="candidate-focus">후보를 선택하면 Principal Variation을 여기에 표시합니다.</p>
+            <button id="clear-pv" class="text-button" type="button">고정 해제</button>
+          </div>
+        </section>
+
+        <aside class="workbench-shell" aria-label="연습 및 분석 작업대">
+          <section class="controls command-deck" aria-labelledby="settings-heading">
+            <div class="command-heading">
               <div>
-                <p class="section-kicker">Principal Variation</p>
-                <h2>선택 후보와 PV</h2>
+                <h2 id="settings-heading">세션</h2>
+                <p id="mode-help" class="mode-help">사용자 색을 정하고 반대 색은 KataGomo가 자동 착수합니다.</p>
               </div>
-              <button id="clear-pv" class="text-button" type="button">PV 고정 해제</button>
-            </div>
-            <p id="candidate-focus">후보 원이나 표의 행에 마우스를 올리면 PV가 반투명 수순으로 표시됩니다.</p>
-          </section>
-        </div>
-
-        <aside class="inspector" aria-label="연습 및 분석 도구">
-          <section class="controls card command-card" aria-labelledby="settings-heading">
-            <div class="section-heading">
-              <div>
-                <p class="section-kicker">Practice setup</p>
-                <h2 id="settings-heading">연습과 분석</h2>
-              </div>
-              <span>규칙은 15×15 Renju로 고정됩니다</span>
+              <span id="practice-phase" class="status neutral">설정 중</span>
             </div>
 
-            <div class="mode-row">
-              <label class="mode-field">
-                모드
+            <div class="session-settings">
+              <label class="mode-field">모드
                 <select id="mode">
                   <option value="practice" selected>AI와 연습</option>
                   <option value="analysis">양쪽 직접 두기 · 분석</option>
                 </select>
               </label>
-              <p id="mode-help" class="mode-help">
-                사용자 색을 정하고 반대 색은 KataGomo가 자동 착수합니다.
-              </p>
+              <label id="user-color-setting">사용자 색
+                <select id="user-color">
+                  <option value="B" selected>흑</option>
+                  <option value="W">백</option>
+                </select>
+              </label>
+              <label>분석량
+                <select id="max-visits">
+                  <option value="100" selected>100 visits</option>
+                  <option value="500">500 visits</option>
+                </select>
+              </label>
+              <details id="practice-options" class="practice-options">
+                <summary>연습 옵션</summary>
+                <div class="practice-options-fields">
+                  <label id="stop-ply-setting">종료 시점
+                    <select id="stop-ply">
+                      <option value="6">6수</option><option value="8">8수</option><option value="10">10수</option>
+                      <option value="12">12수</option><option value="14" selected>14수</option><option value="16">16수</option>
+                      <option value="manual">제한 없음 · 직접 종료</option>
+                    </select>
+                  </label>
+                  <label id="grading-mode-setting">채점 표시
+                    <select id="grading-mode">
+                      <option value="immediate" selected>매 수 즉시</option><option value="end">종료 후</option>
+                    </select>
+                  </label>
+                </div>
+              </details>
             </div>
 
             <div id="task-banner" class="task-banner" role="status" aria-live="polite">
@@ -112,388 +120,209 @@
               <span id="task-message">빈 보드에서 시작하거나 직접 수를 둔 뒤 연습을 시작할 수 있습니다.</span>
             </div>
 
-            <div class="settings-grid">
-              <label id="user-color-setting">
-                사용자 색
-                <select id="user-color">
-                  <option value="B" selected>흑</option>
-                  <option value="W">백</option>
-                </select>
-              </label>
-              <label id="stop-ply-setting">
-                종료 시점
-                <select id="stop-ply">
-                  <option value="6">6수</option>
-                  <option value="8">8수</option>
-                  <option value="10">10수</option>
-                  <option value="12">12수</option>
-                  <option value="14" selected>14수</option>
-                  <option value="16">16수</option>
-                  <option value="manual">제한 없음 · 직접 종료</option>
-                </select>
-              </label>
-              <label id="grading-mode-setting">
-                채점 표시
-                <select id="grading-mode">
-                  <option value="immediate" selected>매 수 즉시</option>
-                  <option value="end">종료 후</option>
-                </select>
-              </label>
-              <label>
-                분석량
-                <select id="max-visits">
-                  <option value="100" selected>100 visits</option>
-                  <option value="500">500 visits</option>
-                </select>
-              </label>
-            </div>
-
             <div class="command-actions">
               <div class="button-row primary-actions">
                 <button id="practice-start" class="primary" type="button">이 위치에서 연습 시작</button>
                 <button id="analyze" class="secondary" type="button">현재 위치 분석</button>
+                <button id="cancel" class="danger" type="button" disabled>분석 취소</button>
               </div>
               <div class="button-row supporting-actions">
                 <button id="retry-legality" class="secondary" type="button" hidden>금수 판정 다시 시도</button>
                 <button id="retry-training" class="secondary" type="button" hidden>연습 설정 다시 확인</button>
-                <button id="practice-finish" class="secondary" type="button" disabled>현재 수에서 연습 종료</button>
-                <button id="cancel" class="danger" type="button" disabled>분석 취소</button>
+                <button id="practice-finish" class="text-button" type="button" disabled>현재 수에서 연습 종료</button>
               </div>
             </div>
           </section>
 
-          <section id="live-analysis" class="card live-analysis" aria-labelledby="live-analysis-heading">
-            <div class="section-heading">
-              <div>
-                <p class="section-kicker">Live analysis</p>
-                <h2 id="live-analysis-heading">현재 위치 평가</h2>
-              </div>
-              <span id="response-kind">—</span>
-            </div>
-            <div class="analysis-metrics">
-              <div class="metric metric-primary">
-                <span>Winrate (Black)</span>
-                <strong id="black-winrate">—</strong>
-                <small>엔진 원시 관점 · 항상 BLACK</small>
-              </div>
-              <div class="metric">
-                <span>Winrate (Current player)</span>
-                <strong id="current-winrate">—</strong>
-                <small>현재 차례 관점으로 변환</small>
-              </div>
-              <div id="user-winrate-row" class="metric">
-                <span>Winrate (User)</span>
-                <strong id="user-winrate">—</strong>
-                <small>선택한 사용자 색 관점으로 변환</small>
-              </div>
-              <div class="metric">
-                <span>Root visits</span>
-                <strong id="root-visits">—</strong>
-                <small>현재 위치 전체 검색량</small>
-              </div>
-            </div>
-          </section>
-
-          <section class="card candidate-card" aria-labelledby="candidate-heading">
-            <div class="section-heading">
-              <div>
-                <p class="section-kicker">MCTS search</p>
-                <h2 id="candidate-heading">후보 수</h2>
-              </div>
-              <span id="candidate-perspective">Winrate는 BLACK 관점 · <a id="glossary-link" href="#analysis-glossary">용어 설명 ↓</a></span>
-            </div>
-
-            <div class="candidate-toolbar" aria-labelledby="overlay-heading">
-              <div>
-                <h3 id="overlay-heading">보드 오버레이</h3>
-                <p>원의 크기는 선택한 지표에 비례합니다.</p>
-              </div>
-              <div class="field-row compact-fields">
-                <label>
-                  원 크기
-                  <select id="size-metric">
-                    <option value="visits" selected>Visit share</option>
-                    <option value="policy">Raw policy</option>
-                  </select>
-                </label>
-                <label>
-                  후보 수
-                  <select id="top-count">
-                    <option value="3">상위 3개</option>
-                    <option value="5" selected>상위 5개</option>
-                    <option value="10">상위 10개</option>
-                  </select>
-                </label>
-              </div>
-            </div>
-            <p class="legend" aria-label="보드 오버레이 범례">
-              <span><i class="legend-dot first"></i> Order 0</span>
-              <span><i class="legend-dot pv"></i> PV 수순</span>
-              <span><i class="legend-cross">×</i> 흑 금수</span>
-            </p>
-
-            <div class="table-wrap candidate-table-wrap">
-              <table>
-                <caption class="sr-only">KataGomo MCTS 후보와 각 후보의 분석 지표</caption>
-                <thead>
-                  <tr>
-                    <th scope="col">Order</th>
-                    <th scope="col">Move</th>
-                    <th scope="col">Raw policy</th>
-                    <th scope="col">Visits</th>
-                    <th scope="col">Visit share</th>
-                    <th scope="col">Winrate (Black)</th>
-                    <th scope="col">PV</th>
-                  </tr>
-                </thead>
-                <tbody id="candidates">
-                  <tr><td colspan="7" class="empty">현재 위치를 분석하면 MCTS 후보가 표시됩니다.</td></tr>
-                </tbody>
-              </table>
-            </div>
-          </section>
-
-          <section class="card" aria-labelledby="policy-heading">
-            <div class="section-heading">
-              <div>
-                <p class="section-kicker">Neural network output</p>
-                <h2 id="policy-heading">Raw policy 순위</h2>
-              </div>
-              <span>MCTS Visits와 독립된 값</span>
-            </div>
-            <ol id="raw-policy" class="policy-list">
-              <li>현재 위치를 분석하면 합법 수의 Raw policy 순위가 표시됩니다.</li>
-            </ol>
-          </section>
-
-          <section id="comparison-card" class="card comparison-card" aria-labelledby="comparison-heading">
-            <div class="section-heading">
-              <div>
-                <p class="section-kicker">What-if analysis</p>
-                <h2 id="comparison-heading">수 비교 실험실</h2>
-              </div>
-              <span id="comparison-status" class="comparison-status">대기</span>
-            </div>
-            <p class="comparison-intro">
-              현재 판을 바꾸지 않고 같은 분석량으로 두 수를 강제 착수해 비교합니다.
-              A/B 자체의 Raw policy·MCTS Order는 착수 전 기준 위치에서, 응수와 승률은 착수 후 위치에서 가져옵니다.
-            </p>
-
-            <div id="comparison-picker" class="comparison-picker" aria-label="비교할 두 수 선택">
-              <button id="comparison-slot-a" class="comparison-slot" type="button" data-slot="a" aria-pressed="false">
-                <small>수 A</small>
-                <strong id="comparison-move-a">선택 안 됨</strong>
-              </button>
-              <span class="comparison-versus" aria-hidden="true">VS</span>
-              <button id="comparison-slot-b" class="comparison-slot" type="button" data-slot="b" aria-pressed="false">
-                <small>수 B</small>
-                <strong id="comparison-move-b">선택 안 됨</strong>
-              </button>
-            </div>
-
-            <p id="comparison-progress" class="comparison-progress" role="status" aria-live="polite">
-              ‘두 수 선택’을 누른 뒤 보드의 합법 교차점 두 곳을 고르세요.
-            </p>
-            <div class="button-row comparison-actions">
-              <button id="comparison-select" class="secondary" type="button">두 수 선택</button>
-              <button id="comparison-run" class="primary" type="button" disabled>같은 visits로 비교</button>
-              <button id="comparison-cancel" class="danger" type="button" hidden>비교 취소</button>
-              <button id="comparison-clear" class="text-button" type="button" disabled>비교 초기화</button>
-            </div>
-
-            <div id="comparison-results" class="comparison-results" hidden>
-              <p id="comparison-conclusion" class="comparison-conclusion"></p>
-              <div class="table-wrap">
-                <table class="comparison-table">
-                  <caption class="sr-only">같은 visits로 분석한 수 A와 수 B의 KataGomo 결과 비교</caption>
-                  <thead>
-                    <tr>
-                      <th scope="col">지표</th>
-                      <th id="comparison-heading-a" scope="col">수 A</th>
-                      <th id="comparison-heading-b" scope="col">수 B</th>
-                    </tr>
-                  </thead>
-                  <tbody id="comparison-body"></tbody>
-                </table>
-              </div>
-              <div class="button-row comparison-preview-actions" aria-label="비교 PV 보드 미리보기">
-                <button id="comparison-preview-a" class="secondary" type="button">A + 응수 PV 보기</button>
-                <button id="comparison-preview-b" class="secondary" type="button">B + 응수 PV 보기</button>
-                <button id="comparison-preview-clear" class="text-button" type="button">미리보기 해제</button>
-              </div>
-            </div>
-            <p class="comparison-caveat">
-              Winrate는 KataGomo의 탐색 추정치이며 BLACK 관점입니다. 이 비교는 후보 차이를 보여주지만 전략적 이유를 문장으로 단정하지 않습니다.
-            </p>
-          </section>
-
-          <section id="instant-feedback-card" class="card feedback-card" hidden aria-live="polite">
-            <div class="section-heading">
-              <h2>방금 둔 수</h2>
-              <span id="instant-grade-state">실제 엔진 분석</span>
-            </div>
+          <section id="instant-feedback-card" class="feedback-strip" hidden aria-live="polite">
+            <div class="feedback-heading"><strong>방금 둔 수</strong><span id="instant-grade-state">실제 엔진 분석</span></div>
             <div id="instant-feedback"></div>
           </section>
 
-          <section id="results-card" class="card results-card" hidden aria-labelledby="results-heading">
-            <div class="section-heading">
+          <section id="workbench" class="workbench" aria-labelledby="workbench-heading" data-active-tab="analysis">
+            <div class="workbench-heading">
               <div>
-                <p class="section-kicker">Practice result</p>
-                <h2 id="results-heading">연습 결과</h2>
+                <h2 id="workbench-heading">분석 작업대</h2>
+                <p id="candidate-perspective">Winrate는 BLACK 관점 · <a id="glossary-link" href="#analysis-glossary">용어 설명</a></p>
               </div>
-              <span>Winrate (User) 관점</span>
+              <span id="analysis-status" class="status neutral">연결 대기</span>
             </div>
-            <p id="result-summary" class="result-summary"></p>
-            <div class="table-wrap">
-              <table class="grade-table">
-                <caption class="sr-only">사용자가 둔 각 수의 KataGomo 분석 결과</caption>
-                <thead>
-                  <tr>
-                    <th scope="col">수순</th>
-                    <th scope="col">사용자 수</th>
-                    <th scope="col">추천 수</th>
-                    <th scope="col">Raw policy</th>
-                    <th scope="col">Visits rank (사용자/추천/차이)</th>
-                    <th scope="col">Winrate (User) 전→후</th>
-                    <th scope="col">추천 대비 Winrate</th>
-                    <th scope="col">Root visits</th>
-                  </tr>
-                </thead>
-                <tbody id="summary-body"></tbody>
-              </table>
-            </div>
-            <div class="mistake-panel">
-              <h3>가장 큰 실수 3개</h3>
-              <ol id="mistakes"></ol>
-            </div>
-            <div class="button-row result-actions">
-              <button id="continue-practice" class="primary" type="button">현재 판 이어서 연습</button>
-              <button id="same-start" class="secondary" type="button">같은 시작점 다시 연습</button>
-              <button id="new-opening" class="secondary" type="button">새 판 시작</button>
-            </div>
-          </section>
 
-          <section id="review-panel" class="card review-card" aria-labelledby="review-heading" hidden>
-            <div class="section-heading">
-              <div>
-                <p class="section-kicker">Saved practice review</p>
-                <h2 id="review-heading">복기</h2>
-              </div>
-              <span id="review-position">— / —수</span>
+            <div class="workbench-tabs" role="tablist" aria-label="작업대 보기">
+              <button id="workbench-tab-analysis" role="tab" type="button" aria-selected="true" aria-controls="workbench-panel-analysis" tabindex="0">분석</button>
+              <button id="workbench-tab-comparison" role="tab" type="button" aria-selected="false" aria-controls="comparison-card" tabindex="-1">수 비교</button>
+              <button id="workbench-tab-history" role="tab" type="button" aria-selected="false" aria-controls="workbench-panel-history" tabindex="-1">기록 <span id="history-count" class="tab-count">0</span></button>
             </div>
-            <p id="review-summary" class="review-summary">저장된 연습을 선택하면 수순별 평가를 복기할 수 있습니다.</p>
-            <div class="review-workspace">
-              <canvas
-                id="review-board"
-                width="540"
-                height="540"
-                role="img"
-                aria-label="저장된 연습의 읽기 전용 15×15 Renju 복기판"
-              ></canvas>
-              <div class="review-inspector">
-                <div class="review-navigation" aria-label="복기 수순 이동">
-                  <button id="review-first" class="secondary" type="button">처음</button>
-                  <button id="review-prev" class="secondary" type="button">이전 수</button>
-                  <button id="review-next" class="secondary" type="button">다음 수</button>
-                  <button id="review-last" class="secondary" type="button">마지막</button>
+
+            <section id="workbench-panel-analysis" class="workbench-panel analysis-panel" role="tabpanel" aria-labelledby="workbench-tab-analysis">
+              <section id="live-analysis" class="analysis-summary" aria-labelledby="live-analysis-heading">
+                <div class="summary-primary">
+                  <span id="live-analysis-heading">Winrate (Black)</span>
+                  <strong id="black-winrate">—</strong>
+                  <small>엔진 원시 관점 · 항상 BLACK</small>
                 </div>
-                <div id="review-detail" class="review-detail" aria-live="polite"></div>
+                <dl class="summary-secondary">
+                  <div><dt>Current player</dt><dd id="current-winrate">—</dd></div>
+                  <div id="user-winrate-row"><dt>User</dt><dd id="user-winrate">—</dd></div>
+                  <div><dt>Root visits</dt><dd id="root-visits">—</dd></div>
+                  <div><dt>결과</dt><dd id="response-kind">—</dd></div>
+                </dl>
+              </section>
+
+              <div class="analysis-view-bar">
+                <div class="analysis-view-tabs" role="tablist" aria-label="분석 결과 보기">
+                  <button id="analysis-view-tab-mcts" role="tab" type="button" aria-selected="true" aria-controls="analysis-view-mcts" tabindex="0">MCTS 후보</button>
+                  <button id="analysis-view-tab-policy" role="tab" type="button" aria-selected="false" aria-controls="analysis-view-policy" tabindex="-1">Raw policy</button>
+                </div>
+                <label class="top-count-field">표시
+                  <select id="top-count">
+                    <option value="3">상위 3개</option><option value="5" selected>상위 5개</option><option value="10">상위 10개</option>
+                  </select>
+                </label>
               </div>
-            </div>
-            <div class="button-row review-actions">
-              <button id="review-start-practice" class="primary" type="button">이 위치에서 연습</button>
-              <button id="review-close" class="secondary" type="button">복기 닫기</button>
+
+              <section id="analysis-view-mcts" class="analysis-view" role="tabpanel" aria-labelledby="analysis-view-tab-mcts">
+                <div class="candidate-toolbar">
+                  <p><strong>보드 오버레이</strong> · 원 크기 기준</p>
+                  <label><span class="sr-only">원 크기</span>
+                    <select id="size-metric"><option value="visits" selected>Visit share</option><option value="policy">Raw policy</option></select>
+                  </label>
+                  <p class="legend" aria-label="보드 오버레이 범례">
+                    <span><i class="legend-dot first"></i> Order 0</span><span><i class="legend-dot pv"></i> PV</span><span><i class="legend-cross">×</i> 흑 금수</span>
+                  </p>
+                </div>
+                <div class="table-wrap candidate-table-wrap">
+                  <table>
+                    <caption class="sr-only">KataGomo MCTS 후보와 각 후보의 분석 지표</caption>
+                    <thead><tr><th scope="col">Order</th><th scope="col">Move</th><th scope="col">Raw policy</th><th scope="col">Visits</th><th scope="col">Visit share</th><th scope="col">Winrate (Black)</th><th scope="col">PV</th></tr></thead>
+                    <tbody id="candidates"><tr><td colspan="7" class="empty">현재 위치를 분석하면 MCTS 후보가 표시됩니다.</td></tr></tbody>
+                  </table>
+                </div>
+              </section>
+
+              <section id="analysis-view-policy" class="analysis-view policy-view" role="tabpanel" aria-labelledby="analysis-view-tab-policy" hidden>
+                <div class="policy-heading"><div><h3>Raw policy 순위</h3><p>MCTS Visits와 독립된 신경망 원시 분포입니다.</p></div></div>
+                <ol id="raw-policy" class="policy-list"><li>현재 위치를 분석하면 합법 수의 Raw policy 순위가 표시됩니다.</li></ol>
+              </section>
+            </section>
+
+            <section id="comparison-card" class="workbench-panel comparison-panel" role="tabpanel" aria-labelledby="workbench-tab-comparison" hidden>
+              <div class="panel-heading">
+                <div><h3>수 비교 실험실</h3><p class="comparison-intro">현재 판을 바꾸지 않고 같은 분석량으로 두 수를 강제 착수해 비교합니다. A/B 자체의 Raw policy·MCTS Order는 착수 전 기준 위치에서, 응수와 승률은 착수 후 위치에서 가져옵니다.</p></div>
+                <span id="comparison-status" class="comparison-status">대기</span>
+              </div>
+              <div id="comparison-picker" class="comparison-picker" aria-label="비교할 두 수 선택">
+                <button id="comparison-slot-a" class="comparison-slot" type="button" data-slot="a" aria-pressed="false"><small>수 A</small><strong id="comparison-move-a">선택 안 됨</strong></button>
+                <span class="comparison-versus" aria-hidden="true">VS</span>
+                <button id="comparison-slot-b" class="comparison-slot" type="button" data-slot="b" aria-pressed="false"><small>수 B</small><strong id="comparison-move-b">선택 안 됨</strong></button>
+              </div>
+              <div class="comparison-command-row">
+                <p id="comparison-progress" class="comparison-progress" role="status" aria-live="polite">‘두 수 선택’을 누른 뒤 보드의 합법 교차점 두 곳을 고르세요.</p>
+                <div class="button-row comparison-actions">
+                  <button id="comparison-select" class="secondary" type="button">두 수 선택</button>
+                  <button id="comparison-run" class="primary" type="button" disabled>같은 visits로 비교</button>
+                  <button id="comparison-cancel" class="danger" type="button" hidden>비교 취소</button>
+                  <button id="comparison-clear" class="text-button" type="button" disabled>초기화</button>
+                </div>
+              </div>
+              <div id="comparison-results" class="comparison-results" hidden>
+                <p id="comparison-conclusion" class="comparison-conclusion"></p>
+                <div id="comparison-glance" class="comparison-glance" aria-live="polite"></div>
+                <div class="button-row comparison-preview-actions" aria-label="비교 PV 보드 미리보기">
+                  <button id="comparison-preview-a" class="secondary" type="button">A + 응수 PV 보기</button>
+                  <button id="comparison-preview-b" class="secondary" type="button">B + 응수 PV 보기</button>
+                  <button id="comparison-preview-clear" class="text-button" type="button">미리보기 해제</button>
+                </div>
+                <details class="comparison-details"><summary>전체 기술 지표</summary>
+                  <div class="table-wrap"><table class="comparison-table">
+                    <caption class="sr-only">같은 visits로 분석한 수 A와 수 B의 KataGomo 결과 비교</caption>
+                    <thead><tr><th scope="col">지표</th><th id="comparison-heading-a" scope="col">수 A</th><th id="comparison-heading-b" scope="col">수 B</th></tr></thead>
+                    <tbody id="comparison-body"></tbody>
+                  </table></div>
+                </details>
+              </div>
+              <p class="comparison-caveat">Winrate는 KataGomo의 탐색 추정치이며 BLACK 관점입니다. 이 비교는 후보 차이를 보여주지만 전략적 이유를 문장으로 단정하지 않습니다.</p>
+            </section>
+
+            <section id="workbench-panel-history" class="workbench-panel history-panel" role="tabpanel" aria-labelledby="workbench-tab-history" hidden>
+              <div id="history-index">
+                <section id="results-card" class="results-card" hidden aria-labelledby="results-heading">
+                  <div class="panel-heading"><div><h3 id="results-heading">연습 결과</h3><p>Winrate (User) 관점</p></div></div>
+                  <p id="result-summary" class="result-summary"></p>
+                  <div class="mistake-panel"><h3>가장 큰 실수 3개</h3><ol id="mistakes"></ol></div>
+                  <details class="result-details"><summary>전체 수별 평가</summary>
+                    <div class="table-wrap"><table class="grade-table">
+                      <caption class="sr-only">사용자가 둔 각 수의 KataGomo 분석 결과</caption>
+                      <thead><tr><th scope="col">수순</th><th scope="col">사용자 수</th><th scope="col">추천 수</th><th scope="col">Raw policy</th><th scope="col">Visits rank (사용자/추천/차이)</th><th scope="col">Winrate (User) 전→후</th><th scope="col">추천 대비 Winrate</th><th scope="col">Root visits</th></tr></thead>
+                      <tbody id="summary-body"></tbody>
+                    </table></div>
+                  </details>
+                  <div class="button-row result-actions">
+                    <button id="continue-practice" class="primary" type="button">현재 판 이어서 연습</button>
+                    <button id="same-start" class="secondary" type="button">같은 시작점 다시 연습</button>
+                    <button id="new-opening" class="secondary" type="button">새 판 시작</button>
+                  </div>
+                </section>
+
+                <section class="history-library" aria-labelledby="history-heading">
+                  <div class="panel-heading">
+                    <div><h3 id="history-heading">저장된 연습</h3><p>이 브라우저에 최근 20판까지 저장합니다.</p></div>
+                    <button id="history-clear" class="text-button danger-text" type="button" disabled>전체 삭제</button>
+                  </div>
+                  <p id="history-diagnostics" class="history-diagnostics" role="status" aria-live="polite" hidden></p>
+                  <ol id="history-list" class="history-list"><li>연습을 완료하면 이 브라우저에 기록이 저장됩니다.</li></ol>
+                </section>
+              </div>
+
+              <section id="review-panel" class="review-card" aria-labelledby="review-heading" hidden>
+                <div class="panel-heading">
+                  <div><h3 id="review-heading">복기</h3><p id="review-position">— / —수</p></div>
+                  <button id="review-close" class="text-button" type="button">기록 목록</button>
+                </div>
+                <p id="review-summary" class="review-summary">저장된 연습을 선택하면 수순별 평가를 복기할 수 있습니다.</p>
+                <div class="review-workspace">
+                  <canvas id="review-board" width="540" height="540" role="img" aria-label="저장된 연습의 읽기 전용 15×15 Renju 복기판"></canvas>
+                  <div class="review-inspector">
+                    <div class="review-navigation" aria-label="복기 수순 이동">
+                      <button id="review-first" class="secondary" type="button">처음</button><button id="review-prev" class="secondary" type="button">이전 수</button><button id="review-next" class="secondary" type="button">다음 수</button><button id="review-last" class="secondary" type="button">마지막</button>
+                    </div>
+                    <div id="review-detail" class="review-detail" aria-live="polite"></div>
+                  </div>
+                </div>
+                <div class="button-row review-actions"><button id="review-start-practice" class="primary" type="button">이 위치에서 연습</button></div>
+              </section>
+            </section>
+
+            <div class="workbench-utilities">
+              <details id="analysis-glossary" class="utility-drawer">
+                <summary>분석 용어</summary>
+                <dl class="glossary-list">
+                  <div><dt>Raw policy</dt><dd>MCTS 검색 전 신경망이 각 착수에 부여한 확률입니다. 화면 순위에는 현재 위치의 합법 수만 사용합니다.</dd></div>
+                  <div><dt>Visits</dt><dd>MCTS가 해당 후보를 탐색한 횟수입니다.</dd></div>
+                  <div><dt>Visit share</dt><dd>해당 후보의 Visits를 반환된 후보들의 Visits 합으로 나눈 값입니다. Root visits와 분모가 다를 수 있습니다.</dd></div>
+                  <div><dt>Root visits</dt><dd>현재 위치의 MCTS 루트 전체 검색량입니다. 반환된 후보 Visits 합과 같지 않을 수 있습니다.</dd></div>
+                  <div><dt>Winrate (Black)</dt><dd>현재 검색에서 흑이 이길 것으로 추정한 확률입니다. KataGomo의 원시 Winrate 관점은 항상 BLACK이며 절대적인 승패 보장은 아닙니다.</dd></div>
+                  <div><dt>Winrate (Current player)</dt><dd>Winrate (Black)를 지금 둘 차례의 색 관점으로 변환한 값입니다. 백 차례에는 1 − Winrate (Black)입니다.</dd></div>
+                  <div><dt>Winrate (User)</dt><dd>AI와 연습할 때 선택한 사용자 색 관점으로 변환한 값입니다. 양쪽 직접 두기 모드에서는 표시하지 않습니다.</dd></div>
+                  <div><dt>PV</dt><dd>Principal Variation. 현재 검색에서 예상하는 대표 진행 수순입니다.</dd></div>
+                  <div><dt>Order</dt><dd>KataGomo가 반환한 후보 순서입니다. Order 0이 최우선 후보입니다.</dd></div>
+                  <div><dt>Raw policy rank</dt><dd>합법 수를 Raw policy가 큰 순서로 정렬한 순위입니다. MCTS를 거치기 전 신경망 선호를 비교합니다.</dd></div>
+                  <div><dt>Visits rank</dt><dd>반환된 MCTS 후보를 Visits가 많은 순서로 본 순위입니다. Raw policy rank와 다를 수 있습니다.</dd></div>
+                  <div><dt>100 / 500 visits</dt><dd>한 위치에서 요청할 최대 MCTS 검색량입니다. 100은 빠른 반복용, 500은 더 오래 탐색해 후보 비교를 안정시키는 용도입니다.</dd></div>
+                  <div><dt>분석 부족</dt><dd>실제 확보된 Visits가 채점 기준보다 적어 결과를 확정적으로 평가하지 않는 상태입니다. 수치는 숨기지 않고 그대로 표시합니다.</dd></div>
+                </dl>
+              </details>
+              <details class="utility-drawer diagnostics-card">
+                <summary id="protocol-heading">엔진 세부정보</summary>
+                <dl>
+                  <div><dt>엔진 상태</dt><dd id="engine-diagnostic-state">확인 중</dd></div><div><dt>엔진 PID</dt><dd id="engine-pid">—</dd></div>
+                  <div><dt>재시작 횟수</dt><dd id="engine-restarts">—</dd></div><div><dt>마지막 엔진 오류</dt><dd id="engine-last-error">—</dd></div>
+                  <div><dt>Request ID</dt><dd id="request-id">—</dd></div><div><dt>Policy 길이</dt><dd id="policy-length">—</dd></div>
+                  <div><dt>후보 Visits 합</dt><dd id="visit-total">—</dd></div><div><dt>Winrate 원시 관점</dt><dd>BLACK</dd></div>
+                </dl>
+              </details>
             </div>
           </section>
-
-          <section class="card history-card" aria-labelledby="history-heading">
-            <div class="section-heading">
-              <div>
-                <p class="section-kicker">Local history</p>
-                <h2 id="history-heading">이 브라우저의 연습 기록</h2>
-              </div>
-              <div class="history-heading-actions">
-                <span>최근 <strong id="history-count">0</strong>판 저장 · 최대 20판</span>
-                <button id="history-clear" class="text-button danger-text" type="button" disabled>전체 삭제</button>
-              </div>
-            </div>
-            <p id="history-diagnostics" class="history-diagnostics" role="status" aria-live="polite" hidden></p>
-            <ol id="history-list" class="history-list">
-              <li>연습을 완료하면 이 브라우저에 기록이 저장됩니다.</li>
-            </ol>
-          </section>
-
-          <details id="analysis-glossary" class="card glossary-card">
-            <summary>분석 용어 설명</summary>
-            <dl class="glossary-list">
-              <div>
-                <dt>Raw policy</dt>
-                <dd>MCTS 검색 전 신경망이 각 착수에 부여한 확률입니다. 화면 순위에는 현재 위치의 합법 수만 사용합니다.</dd>
-              </div>
-              <div>
-                <dt>Visits</dt>
-                <dd>MCTS가 해당 후보를 탐색한 횟수입니다.</dd>
-              </div>
-              <div>
-                <dt>Visit share</dt>
-                <dd>해당 후보의 Visits를 반환된 후보들의 Visits 합으로 나눈 값입니다. Root visits와 분모가 다를 수 있습니다.</dd>
-              </div>
-              <div>
-                <dt>Root visits</dt>
-                <dd>현재 위치의 MCTS 루트 전체 검색량입니다. 반환된 후보 Visits 합과 같지 않을 수 있습니다.</dd>
-              </div>
-              <div>
-                <dt>Winrate (Black)</dt>
-                <dd>현재 검색에서 흑이 이길 것으로 추정한 확률입니다. KataGomo의 원시 Winrate 관점은 항상 BLACK이며 절대적인 승패 보장은 아닙니다.</dd>
-              </div>
-              <div>
-                <dt>Winrate (Current player)</dt>
-                <dd>Winrate (Black)를 지금 둘 차례의 색 관점으로 변환한 값입니다. 백 차례에는 1 − Winrate (Black)입니다.</dd>
-              </div>
-              <div>
-                <dt>Winrate (User)</dt>
-                <dd>AI와 연습할 때 선택한 사용자 색 관점으로 변환한 값입니다. 양쪽 직접 두기 모드에서는 표시하지 않습니다.</dd>
-              </div>
-              <div>
-                <dt>PV</dt>
-                <dd>Principal Variation. 현재 검색에서 예상하는 대표 진행 수순입니다.</dd>
-              </div>
-              <div>
-                <dt>Order</dt>
-                <dd>KataGomo가 반환한 후보 순서입니다. Order 0이 최우선 후보입니다.</dd>
-              </div>
-              <div>
-                <dt>Raw policy rank</dt>
-                <dd>합법 수를 Raw policy가 큰 순서로 정렬한 순위입니다. MCTS를 거치기 전 신경망 선호를 비교합니다.</dd>
-              </div>
-              <div>
-                <dt>Visits rank</dt>
-                <dd>반환된 MCTS 후보를 Visits가 많은 순서로 본 순위입니다. Raw policy rank와 다를 수 있습니다.</dd>
-              </div>
-              <div>
-                <dt>100 / 500 visits</dt>
-                <dd>한 위치에서 요청할 최대 MCTS 검색량입니다. 100은 빠른 반복용, 500은 더 오래 탐색해 후보 비교를 안정시키는 용도입니다.</dd>
-              </div>
-              <div>
-                <dt>분석 부족</dt>
-                <dd>실제 확보된 Visits가 채점 기준보다 적어 결과를 확정적으로 평가하지 않는 상태입니다. 수치는 숨기지 않고 그대로 표시합니다.</dd>
-              </div>
-            </dl>
-          </details>
-
-          <details class="card diagnostics-card">
-            <summary id="protocol-heading">엔진 진단</summary>
-            <dl>
-              <div><dt>엔진 상태</dt><dd id="engine-diagnostic-state">확인 중</dd></div>
-              <div><dt>엔진 PID</dt><dd id="engine-pid">—</dd></div>
-              <div><dt>재시작 횟수</dt><dd id="engine-restarts">—</dd></div>
-              <div><dt>마지막 엔진 오류</dt><dd id="engine-last-error">—</dd></div>
-              <div><dt>Request ID</dt><dd id="request-id">—</dd></div>
-              <div><dt>Policy 길이</dt><dd id="policy-length">—</dd></div>
-              <div><dt>후보 Visits 합</dt><dd id="visit-total">—</dd></div>
-              <div><dt>Winrate 원시 관점</dt><dd>BLACK</dd></div>
-            </dl>
-          </details>
         </aside>
       </section>
     </main>
