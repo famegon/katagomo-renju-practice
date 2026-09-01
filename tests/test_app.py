@@ -105,6 +105,89 @@ def test_fastapi_websocket_stream_on_supported_python(fake_settings):
             assert final["candidates"][0]["rawPrior"] == 0.6
 
 
+def test_comparison_analyses_complete_sequentially_with_shared_identity(
+    fake_settings,
+):
+    base_moves = [
+        ["B", "H8"],
+        ["W", "G7"],
+        ["B", "G9"],
+        ["W", "J7"],
+    ]
+    base_revision = len(base_moves)
+    comparison_epoch = "comparison:fake-websocket-sequence"
+    max_visits = 42
+    requests = [
+        ("comparison_base", "comparison-base", base_moves),
+        (
+            "comparison_a",
+            "comparison-a",
+            [*base_moves, ["B", "F9"]],
+        ),
+        (
+            "comparison_b",
+            "comparison-b",
+            [*base_moves, ["B", "H6"]],
+        ),
+    ]
+
+    with TestClient(create_app(fake_settings)) as client:
+        with client.websocket_connect("/ws/analysis") as websocket:
+            assert websocket.receive_json()["status"] == "connected"
+            completed: list[str] = []
+
+            for purpose, client_request_id, moves in requests:
+                # A new comparison leg is deliberately not submitted until the
+                # preceding leg's final response has been received and checked.
+                expected_completed = [
+                    request[1] for request in requests[: len(completed)]
+                ]
+                assert completed == expected_completed
+                websocket.send_json(
+                    {
+                        "action": "analyze",
+                        "moves": moves,
+                        "maxVisits": max_visits,
+                        "userColor": "B",
+                        "clientRequestId": client_request_id,
+                        "analysisPurpose": purpose,
+                        "positionRevision": base_revision,
+                        "sessionEpoch": comparison_epoch,
+                    }
+                )
+
+                analyzing = websocket.receive_json()
+                assert analyzing["type"] == "status"
+                assert analyzing["status"] == "analyzing"
+                assert analyzing["clientRequestId"] == client_request_id
+                assert analyzing["analysisPurpose"] == purpose
+                assert analyzing["positionRevision"] == base_revision
+                assert analyzing["sessionEpoch"] == comparison_epoch
+                assert analyzing["requestedMaxVisits"] == max_visits
+                assert analyzing["positionMoveCount"] == len(moves)
+
+                partial = websocket.receive_json()
+                final = websocket.receive_json()
+                for response in (partial, final):
+                    assert response["type"] == "analysis"
+                    assert response["clientRequestId"] == client_request_id
+                    assert response["analysisPurpose"] == purpose
+                    assert response["positionRevision"] == base_revision
+                    assert response["sessionEpoch"] == comparison_epoch
+                    assert response["requestedMaxVisits"] == max_visits
+                    assert response["positionMoveCount"] == len(moves)
+                    assert response["turnNumber"] == len(moves)
+
+                assert partial["isDuringSearch"] is True
+                assert partial["isFinal"] is False
+                assert final["isDuringSearch"] is False
+                assert final["isFinal"] is True
+                completed.append(final["clientRequestId"])
+
+            assert completed == ["comparison-base", "comparison-a", "comparison-b"]
+            assert client.get("/api/status").json()["engine"]["startCount"] == 1
+
+
 def test_local_ui_assets_disable_browser_cache(fake_settings):
     with TestClient(create_app(fake_settings)) as client:
         index = client.get("/")
@@ -247,17 +330,28 @@ def test_terminal_position_is_not_sent_to_analysis_engine(fake_settings):
                 {
                     "action": "analyze",
                     "moves": BLACK_LINE_WIN,
-                    "clientRequestId": "terminal-position",
-                    "positionRevision": 9,
+                    "maxVisits": 500,
+                    "clientRequestId": "terminal-comparison-a",
+                    "analysisPurpose": "comparison_a",
+                    "positionRevision": len(BLACK_LINE_WIN) - 1,
+                    "sessionEpoch": "comparison:terminal",
                 }
             )
             terminal = websocket.receive_json()
             assert terminal["type"] == "position"
             assert terminal["code"] == "position_terminal"
-            assert terminal["clientRequestId"] == "terminal-position"
+            assert terminal["clientRequestId"] == "terminal-comparison-a"
+            assert terminal["analysisPurpose"] == "comparison_a"
+            assert terminal["positionRevision"] == len(BLACK_LINE_WIN) - 1
+            assert terminal["sessionEpoch"] == "comparison:terminal"
+            assert terminal["requestedMaxVisits"] == 500
+            assert terminal["positionMoveCount"] == len(BLACK_LINE_WIN)
             assert terminal["gameState"]["winner"] == "B"
             assert terminal["gameState"]["terminalReason"] == "line_win"
-            assert client.get("/api/status").json()["analysisSessionOccupied"] is False
+            status = client.get("/api/status").json()
+            assert status["analysisSessionOccupied"] is False
+            assert status["engine"]["state"] == "ready"
+            assert status["engine"]["activeRequestId"] is None
 
             websocket.send_json(
                 {

@@ -61,6 +61,24 @@ def test_move_sequence_rejects_wrong_turns_and_duplicates(moves):
         AnalyzeCommand.model_validate({"action": "analyze", "moves": moves})
 
 
+@pytest.mark.parametrize(
+    "purpose",
+    ["comparison_base", "comparison_a", "comparison_b"],
+)
+def test_comparison_analysis_purposes_are_explicitly_supported(purpose):
+    command = AnalyzeCommand.model_validate(
+        {
+            "action": "analyze",
+            "moves": [["B", "H8"], ["W", "H9"]],
+            "analysisPurpose": purpose,
+            "sessionEpoch": "comparison:test-run",
+        }
+    )
+
+    assert command.analysisPurpose == purpose
+    assert command.sessionEpoch == "comparison:test-run"
+
+
 def test_position_contract_covers_every_empty_intersection():
     state = RenjuPositionState.model_validate(empty_position_state())
     assert len(state.legalMoves) == 225

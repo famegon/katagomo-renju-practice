@@ -22,6 +22,7 @@ KataGomo Renju Practice는 공식 [KataGomo](https://github.com/hzyhhzy/KataGomo
 - **공식 금수·종국 판정:** 흑의 3×3, 4×4, 장목과 승리·금수패·무승부를 공식 KataGomo 코드로 판정한다.
 - **실시간 분석:** 검색 도중과 최종 결과의 Raw policy, Visits, Visit share, Winrate (Black), PV, Order, Root visits를 표시한다.
 - **후보 비교:** policy와 MCTS visits를 합치지 않고 별도로 보여준다.
+- **수 비교 실험실:** 현재 판을 바꾸지 않고 두 합법 수를 같은 visits로 강제 분석해, 착수 전 policy/MCTS 근거와 착수 후 승률·상대 최선 응수·PV를 나란히 본다.
 - **반복 연습:** 6, 8, 10, 12, 14, 16수 종료 또는 제한 없이 진행할 수 있다. 실제 종국은 선택한 수 제한보다 항상 우선한다.
 - **기록과 복기:** 수별 추천 수, policy/visit 순위, 승률 변화와 큰 실수를 확인하고 읽기 전용 복기판에서 다시 살펴본다.
 
@@ -108,6 +109,28 @@ make dev
 - 후보를 가리키거나 선택하면 PV 예상 수순을 보드에서 확인할 수 있다.
 - 흑 금수는 표시되고 클릭이 차단된다. KataGomo 금수 판정이 실패하면 임의 판정 대신 안전하게 착수와 분석을 막는다.
 - 수 제한에 도달하거나 공식 종국이 되면 결과와 수별 평가를 정리한다.
+
+### 수 비교 실험실
+
+한 위치에서 “왜 A는 좋고 B는 나쁜가?”를 수치와 예상 응수로 확인하려면 **두 수 선택**을 누른다. 보드에서 A와 B를 고른 뒤 **같은 visits로 비교**를 실행한다. 선택 클릭은 가상 수만 지정하며 실제 수순에는 돌을 추가하지 않는다.
+
+한 번의 비교는 같은 persistent 엔진에서 다음 순서로 실행된다.
+
+1. 착수 전 기준 위치
+2. A를 강제 착수한 뒤 상대 차례 위치
+3. B를 강제 착수한 뒤 상대 차례 위치
+
+세 요청은 실행 시 선택된 100 또는 500 visits를 동일하게 사용한다. 따라서 500 visits 비교는 최대 세 번의 500-visits 검색이 필요하며 CPU/Eigen에서는 시간이 걸릴 수 있다. 화면에는 요청 예산뿐 아니라 A/B의 실제 Root visits도 그대로 표시한다.
+
+- A/B의 **Raw policy, policy rank, MCTS Order, Visits, Visit share**는 착수 전 기준 위치에서 읽는다.
+- **Winrate (Black), 상대 Order 0 응수, 응수 PV**는 각 수를 둔 뒤 위치에서 읽는다.
+- 기준 차례가 백이면 “착수자 관점”은 `1 - Black winrate`로 변환하지만 원시 Black 값도 함께 남긴다.
+- 기준 MCTS `moveInfos`에 선택 수가 없으면 Visits나 Order를 0으로 만들지 않고 `MCTS 후보 미반환`으로 표시한다.
+- 선택 수가 즉시 승리로 끝나면 공식 KataGomo 종국 판정을 표시하고 MCTS Winrate를 임의로 100% 또는 0%로 만들지 않는다.
+- KataGomo가 응수나 PV에 `PASS`를 반환하면 원문 그대로 표시한다. 보드 미리보기에는 돌을 그리지 않되, 다음 PV 돌의 색 계산에서는 한 차례로 센다.
+- 비교 도중 취소·연결 종료·판 변경이 생기면 부분 결과로 결론을 만들지 않는다. 전체 비교를 다시 실행한다.
+
+결과의 **A + 응수 PV 보기**, **B + 응수 PV 보기**로 가상 착수와 상대의 Order 0 PV를 라이브 보드 위에 겹쳐 볼 수 있다. 미리보기와 비교 결과를 보는 동안 실제 판은 고정되며, 계속 착수하려면 비교를 초기화한다. 이 기능은 차이를 구조화해 보여주지만 자연어로 전략적 인과를 생성하지는 않는다.
 
 ## 분석 용어
 
@@ -232,7 +255,7 @@ make dev                  # 별도 터미널에서 유지
 make websocket-smoke
 ```
 
-> 최종 회귀 기록(2026-09-01): JavaScript 문법 검사와 웹 상태·저장·DOM 테스트 61 passed, Python 테스트 186 passed / 1 deselected, 실제 CPU/Eigen 엔진·공식 모델 통합 테스트 1 passed / 186 deselected.
+> 최종 회귀 기록(2026-09-01): JavaScript 문법 검사와 웹 상태·저장·DOM 테스트 71 passed, Python 테스트 190 passed / 2 deselected, 실제 CPU/Eigen 엔진·공식 모델 통합 테스트 2 passed / 190 deselected.
 
 ## 배포 파일과 라이선스
 
@@ -533,6 +556,20 @@ helper 응답은 `source="KataGomo Board::isForbidden()"`와 `historySource="Kat
 | Visits 상위 5 | J9, G9, K8, F8, G10 | J9, G9, K8, F8, J10 |
 
 Raw policy 상위 5는 둘 다 `J9, G9, K8, F8, G10`이었다. 500 visits에서는 MCTS 5위가 `J10`으로 달라졌다. 100 visits에서 `moveInfos`가 하나뿐이라는 과거 인상은 JSON 예시가 첫 후보만 발췌했기 때문이며 실제 최종 후보는 14개였다. 원본 비교는 `artifacts/stage2/candidate-distribution/comparison.json`에 생성된다.
+
+### 수 비교 실험 실제 검증
+
+`B H8, W G7, B G9, W J7` 다음 흑 차례에서 공식 helper가 `F9`와 `H6`를 모두 합법으로 판정한 뒤, 한 persistent CPU/Eigen 엔진에서 기준→F9→H6을 각각 100 visits로 순차 분석했다. 세 요청 모두 검색 중 응답과 최종 응답, 226개 policy를 반환했고 엔진 시작 횟수는 1회였다.
+
+| 지표 | F9 | H6 |
+|---|---:|---:|
+| 착수 전 Raw policy | 60.15625% | 0.007629% |
+| 착수 전 MCTS Order / Visits | Order 0 / 31 | Order 8 / 1 |
+| 착수 후 Winrate (Black) | 96.539% | 5.289% |
+| 착수 후 Root visits | 107 | 107 |
+| 상대 Order 0 | F7 | H7 |
+
+이 값은 2026-09-01의 한 실측이며 재검색 시 visits 배분과 승률은 달라질 수 있다. 테스트는 F9 우위 같은 특정 숫자를 정답으로 고정하지 않고, 동일 예산·메타데이터·중간/최종 응답·policy·상대 Order 0/PV 계약을 검증한다. 원본 요약은 통합 테스트 실행 때 `artifacts/comparison-lab/integration-f9-vs-h6.json`에 생성된다.
 
 ### 채점 계약
 

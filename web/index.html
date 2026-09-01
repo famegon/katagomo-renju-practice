@@ -266,6 +266,67 @@
             </ol>
           </section>
 
+          <section id="comparison-card" class="card comparison-card" aria-labelledby="comparison-heading">
+            <div class="section-heading">
+              <div>
+                <p class="section-kicker">What-if analysis</p>
+                <h2 id="comparison-heading">수 비교 실험실</h2>
+              </div>
+              <span id="comparison-status" class="comparison-status">대기</span>
+            </div>
+            <p class="comparison-intro">
+              현재 판을 바꾸지 않고 같은 분석량으로 두 수를 강제 착수해 비교합니다.
+              A/B 자체의 Raw policy·MCTS Order는 착수 전 기준 위치에서, 응수와 승률은 착수 후 위치에서 가져옵니다.
+            </p>
+
+            <div id="comparison-picker" class="comparison-picker" aria-label="비교할 두 수 선택">
+              <button id="comparison-slot-a" class="comparison-slot" type="button" data-slot="a" aria-pressed="false">
+                <small>수 A</small>
+                <strong id="comparison-move-a">선택 안 됨</strong>
+              </button>
+              <span class="comparison-versus" aria-hidden="true">VS</span>
+              <button id="comparison-slot-b" class="comparison-slot" type="button" data-slot="b" aria-pressed="false">
+                <small>수 B</small>
+                <strong id="comparison-move-b">선택 안 됨</strong>
+              </button>
+            </div>
+
+            <p id="comparison-progress" class="comparison-progress" role="status" aria-live="polite">
+              ‘두 수 선택’을 누른 뒤 보드의 합법 교차점 두 곳을 고르세요.
+            </p>
+            <div class="button-row comparison-actions">
+              <button id="comparison-select" class="secondary" type="button">두 수 선택</button>
+              <button id="comparison-run" class="primary" type="button" disabled>같은 visits로 비교</button>
+              <button id="comparison-cancel" class="danger" type="button" hidden>비교 취소</button>
+              <button id="comparison-clear" class="text-button" type="button" disabled>비교 초기화</button>
+            </div>
+
+            <div id="comparison-results" class="comparison-results" hidden>
+              <p id="comparison-conclusion" class="comparison-conclusion"></p>
+              <div class="table-wrap">
+                <table class="comparison-table">
+                  <caption class="sr-only">같은 visits로 분석한 수 A와 수 B의 KataGomo 결과 비교</caption>
+                  <thead>
+                    <tr>
+                      <th scope="col">지표</th>
+                      <th id="comparison-heading-a" scope="col">수 A</th>
+                      <th id="comparison-heading-b" scope="col">수 B</th>
+                    </tr>
+                  </thead>
+                  <tbody id="comparison-body"></tbody>
+                </table>
+              </div>
+              <div class="button-row comparison-preview-actions" aria-label="비교 PV 보드 미리보기">
+                <button id="comparison-preview-a" class="secondary" type="button">A + 응수 PV 보기</button>
+                <button id="comparison-preview-b" class="secondary" type="button">B + 응수 PV 보기</button>
+                <button id="comparison-preview-clear" class="text-button" type="button">미리보기 해제</button>
+              </div>
+            </div>
+            <p class="comparison-caveat">
+              Winrate는 KataGomo의 탐색 추정치이며 BLACK 관점입니다. 이 비교는 후보 차이를 보여주지만 전략적 이유를 문장으로 단정하지 않습니다.
+            </p>
+          </section>
+
           <section id="instant-feedback-card" class="card feedback-card" hidden aria-live="polite">
             <div class="section-heading">
               <h2>방금 둔 수</h2>

@@ -57,6 +57,22 @@ test("candidate table and glossary preserve standard KataGomo terminology", () =
   assert.doesNotMatch(app, /index === 0 \? "rgba\(20,93,72/);
 });
 
+test("the what-if lab separates base move evidence from after-move analysis", () => {
+  for (const id of [
+    "comparison-card", "comparison-status", "comparison-slot-a", "comparison-slot-b",
+    "comparison-move-a", "comparison-move-b", "comparison-progress", "comparison-select",
+    "comparison-run", "comparison-cancel", "comparison-clear", "comparison-results",
+    "comparison-conclusion", "comparison-body", "comparison-preview-a",
+    "comparison-preview-b", "comparison-preview-clear",
+  ]) {
+    assert.match(html, new RegExp(`id="${id}"`));
+  }
+  assert.match(html, /현재 판을 바꾸지 않고 같은 분석량/);
+  assert.match(html, /A\/B 자체의 Raw policy·MCTS Order는 착수 전 기준 위치/);
+  assert.match(html, /Winrate는 KataGomo의 탐색 추정치이며 BLACK 관점/);
+  assert.match(html, /id="comparison-progress"[^>]*role="status"[^>]*aria-live="polite"/);
+});
+
 test("the DOM is wired to the pure view state and exposes official terminal status accessibly", () => {
   assert.match(app, /import \{ deriveViewState \} from "\.\/view-state\.mjs"/);
   assert.match(app, /legalityState = "pending"/);
@@ -87,6 +103,13 @@ test("WebSocket routing and board hit decisions come from executable pure module
   assert.match(app, /import \{ decideWebSocketMessage \} from "\.\/ws-message-state\.mjs"/);
   assert.match(app, /candidateHitAtPoint/);
   assert.match(app, /resolveBoardPointerIntent/);
+  const comparisonRoute = app.indexOf('analysisContext?.owner === "comparison" && handleComparisonMessage(message)');
+  const genericRoute = app.indexOf("const decision = decideWebSocketMessage({");
+  assert.ok(comparisonRoute >= 0 && genericRoute >= 0 && comparisonRoute < genericRoute,
+    "comparison replies, including official terminal responses, must be consumed before the live-board route");
+  assert.match(app, /if \(comparisonIsSelecting\(\)\) \{[\s\S]*?chooseComparisonMove/);
+  assert.match(app, /elements\.cancel\.addEventListener\("click", \(\) => \{\s*if \(comparisonUi\.mode === "running"\) \{\s*cancelComparisonRun\(\);\s*return;/);
+  assert.match(app, /if \(analysisIsLive\(\)\) \{\s*cancelAnalysis\(\);\s*discardIncompleteAnalysis\("취소됨 · 부분 결과 폐기"\);/);
 });
 
 test("streaming candidate rerenders preserve keyboard focus by move without scrolling", () => {

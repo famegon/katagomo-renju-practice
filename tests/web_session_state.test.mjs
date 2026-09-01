@@ -288,6 +288,19 @@ test("AnalysisJob accepts responses only for the live request, revision, and ses
   }), false);
 });
 
+test("AnalysisJob accepts the three comparison workflow purposes", () => {
+  for (const analysisPurpose of ["comparison_base", "comparison_a", "comparison_b"]) {
+    const job = createAnalysisJob({
+      clientRequestId: `request-${analysisPurpose}`,
+      positionRevision: 12,
+      sessionEpoch: "comparison:test-run",
+      analysisPurpose,
+      requestedMaxVisits: 500,
+    });
+    assert.equal(job.analysisPurpose, analysisPurpose);
+  }
+});
+
 test("AnalysisJob transition table makes final, canceled, and interrupted states terminal", () => {
   const requested = beginAnalysisJob({
     clientRequestId: "request-2",

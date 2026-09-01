@@ -27,7 +27,10 @@ const ANALYSIS_TRANSITIONS = Object.freeze({
 });
 
 const PRACTICE_COMPLETION_REASONS = new Set(["game-terminal", "ply-limit", "manual"]);
-const ANALYSIS_PURPOSES = new Set(["manual", "user_pre", "post_user_ai", "final_grade"]);
+const ANALYSIS_PURPOSES = new Set([
+  "manual", "user_pre", "post_user_ai", "final_grade",
+  "comparison_base", "comparison_a", "comparison_b",
+]);
 
 function fail(message) {
   throw new Error(message);

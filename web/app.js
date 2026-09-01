@@ -53,6 +53,15 @@ import {
   clientPointToCanvas,
   configureHiDpiSquareCanvas,
 } from "./canvas-geometry.mjs";
+import {
+  applyComparisonResponse,
+  beginComparisonRequest,
+  cancelComparisonLab,
+  comparisonStageDescriptor,
+  createComparisonLab,
+  deriveComparisonResult,
+  invalidateComparisonLab,
+} from "./comparison-lab.mjs";
 
 const BOARD_SIZE = 15;
 const POLICY_LENGTH = 226;
@@ -80,7 +89,7 @@ const elements = {
   engineStatus: byId("engine-status"), analysisStatus: byId("analysis-status"),
   practicePhase: byId("practice-phase"), legalityStatus: byId("legality-status"),
   actionNotice: byId("action-notice"), nextPlayer: byId("next-player"),
-  plyCount: byId("ply-count"), turnOwner: byId("turn-owner"),
+  plyCount: byId("ply-count"), turnOwner: byId("turn-owner"), boardHelp: byId("board-help"),
   sessionComplete: byId("session-complete"), boardSummary: byId("board-summary"),
   mode: byId("mode"), userColor: byId("user-color"), stopPly: byId("stop-ply"),
   gradingMode: byId("grading-mode"), maxVisits: byId("max-visits"),
@@ -116,6 +125,16 @@ const elements = {
   reviewFirst: byId("review-first"), reviewPrev: byId("review-prev"),
   reviewNext: byId("review-next"), reviewLast: byId("review-last"),
   reviewStartPractice: byId("review-start-practice"), reviewClose: byId("review-close"),
+  comparisonCard: byId("comparison-card"), comparisonStatus: byId("comparison-status"),
+  comparisonSlotA: byId("comparison-slot-a"), comparisonSlotB: byId("comparison-slot-b"),
+  comparisonMoveA: byId("comparison-move-a"), comparisonMoveB: byId("comparison-move-b"),
+  comparisonProgress: byId("comparison-progress"), comparisonSelect: byId("comparison-select"),
+  comparisonRun: byId("comparison-run"), comparisonCancel: byId("comparison-cancel"),
+  comparisonClear: byId("comparison-clear"), comparisonResults: byId("comparison-results"),
+  comparisonConclusion: byId("comparison-conclusion"), comparisonBody: byId("comparison-body"),
+  comparisonHeadingA: byId("comparison-heading-a"), comparisonHeadingB: byId("comparison-heading-b"),
+  comparisonPreviewA: byId("comparison-preview-a"), comparisonPreviewB: byId("comparison-preview-b"),
+  comparisonPreviewClear: byId("comparison-preview-clear"),
 };
 
 let gameDocument = createGameDocument();
@@ -141,6 +160,21 @@ let aiTimer = null;
 let historyDiagnostics = [];
 let history = loadHistory();
 let reviewSession = null;
+let comparisonLab = null;
+let comparisonGeneration = 0;
+let comparisonUi = emptyComparisonUi();
+
+function emptyComparisonUi() {
+  return {
+    mode: "idle",
+    activeSlot: "a",
+    moveA: null,
+    moveB: null,
+    previewSlot: null,
+    anchor: null,
+    error: null,
+  };
+}
 
 function emptyPractice(token = 0) {
   return {
@@ -167,6 +201,20 @@ function positionKey(value = gameDocument.moves) {
 }
 function cloneMoves(value = gameDocument.moves) { return value.map(([player, move]) => [player, move]); }
 function analysisIsLive() { return ["requested", "streaming"].includes(analysisJob?.state); }
+function comparisonIsSelecting() { return comparisonUi.mode === "selecting"; }
+function comparisonWorkflowActive() {
+  return comparisonLab !== null && ["ready", "running"].includes(comparisonLab.status);
+}
+function comparisonIsOpen() { return comparisonUi.mode !== "idle"; }
+function comparisonAnchorIsCurrent() {
+  return Boolean(comparisonUi.anchor)
+    && comparisonUi.anchor.revision === gameDocument.revision
+    && comparisonUi.anchor.positionKey === positionKey();
+}
+function comparisonCanOpen() {
+  return !practice.active && !practice.ended && !practice.summaryPending && !reviewSession
+    && !gameDocument.positionState?.isTerminal && legalityState === "ready";
+}
 function selectedEndCondition() { return parseEndCondition(elements.stopPly.value); }
 function hasReachedPracticeLimit() {
   return Boolean(practice.attempt?.settings)
@@ -185,6 +233,12 @@ function isBoardMove(move) {
 }
 function percent(value) {
   return Number.isFinite(Number(value)) ? `${(Number(value) * 100).toFixed(1)}%` : "—";
+}
+function policyPercent(value) {
+  if (!Number.isFinite(Number(value))) return "—";
+  const measured = Number(value) * 100;
+  const digits = measured >= .1 ? 1 : measured >= .01 ? 2 : 3;
+  return `${measured.toFixed(digits)}%`;
 }
 function percentagePoints(value) {
   if (!Number.isFinite(Number(value))) return "—";
@@ -360,8 +414,13 @@ function drawBoard() {
     context.fillText(String(BOARD_SIZE - index), 22, position);
   }
 
-  drawPv();
-  drawCandidateOverlays();
+  if (comparisonIsOpen()) {
+    candidateHitAreas = [];
+    drawComparisonOverlay();
+  } else {
+    drawPv();
+    drawCandidateOverlays();
+  }
 
   gameDocument.moves.forEach(([player, move], index) => {
     const [x, y] = moveToXY(move);
@@ -416,6 +475,64 @@ function drawPv() {
     context.fillStyle = player === "B" ? "white" : "#1f2421";
     context.font = "bold 11px ui-monospace, monospace";
     context.fillText(`P${index + 1}`, px, py + 1);
+  });
+}
+
+function comparisonPreviewLine(slot) {
+  if (!comparisonLab || !["a", "b"].includes(slot)) return [];
+  const result = deriveComparisonResult(comparisonLab);
+  const branch = result.branches[slot];
+  if (!branch?.move) return [];
+  const responseLine = [...(branch.opponentOrder0Pv || [])];
+  if (branch.opponentOrder0Move && responseLine[0] !== branch.opponentOrder0Move) {
+    responseLine.unshift(branch.opponentOrder0Move);
+  }
+  return [branch.move, ...responseLine];
+}
+
+function drawComparisonMarker(move, label, color, muted = false) {
+  if (!isBoardMove(move) || occupied(move)) return;
+  const [x, y] = moveToXY(move);
+  const px = margin + x * spacing;
+  const py = margin + y * spacing;
+  context.fillStyle = muted ? "rgba(255,255,255,.60)" : "rgba(255,255,255,.90)";
+  context.strokeStyle = muted ? "rgba(78,93,102,.52)" : color;
+  context.lineWidth = muted ? 2 : 4;
+  context.beginPath(); context.arc(px, py, spacing * .40, 0, Math.PI * 2); context.fill(); context.stroke();
+  context.fillStyle = muted ? "#637078" : color;
+  context.font = "800 13px -apple-system, sans-serif";
+  context.fillText(label, px, py + 1);
+}
+
+function drawComparisonOverlay() {
+  const selections = { a: comparisonUi.moveA, b: comparisonUi.moveB };
+  const preview = comparisonUi.previewSlot;
+  if (!preview) {
+    drawComparisonMarker(selections.a, "A", "#315d89");
+    drawComparisonMarker(selections.b, "B", "#7b4e8d");
+    return;
+  }
+
+  const other = preview === "a" ? "b" : "a";
+  drawComparisonMarker(selections[other], other.toUpperCase(), "#637078", true);
+  const line = comparisonPreviewLine(preview);
+  if (!line.length) {
+    drawComparisonMarker(selections[preview], preview.toUpperCase(), preview === "a" ? "#315d89" : "#7b4e8d");
+    return;
+  }
+  line.forEach((move, index) => {
+    if (!isBoardMove(move) || occupied(move)) return;
+    const [x, y] = moveToXY(move);
+    const px = margin + x * spacing;
+    const py = margin + y * spacing;
+    const player = index % 2 === 0 ? comparisonLab.base.player : otherPlayer(comparisonLab.base.player);
+    context.fillStyle = player === "B" ? "rgba(23,26,24,.52)" : "rgba(247,248,245,.78)";
+    context.strokeStyle = preview === "a" ? "rgba(49,93,137,.90)" : "rgba(123,78,141,.90)";
+    context.lineWidth = index === 0 ? 4 : 2;
+    context.beginPath(); context.arc(px, py, spacing * .38, 0, Math.PI * 2); context.fill(); context.stroke();
+    context.fillStyle = player === "B" ? "white" : "#1f2421";
+    context.font = "bold 11px ui-monospace, monospace";
+    context.fillText(index === 0 ? preview.toUpperCase() : `P${index}`, px, py + 1);
   });
 }
 
@@ -493,6 +610,14 @@ function updateBoardText() {
   elements.plyCount.textContent = `${gameDocument.moves.length}수`;
   if (positionState?.isTerminal) {
     elements.turnOwner.textContent = `· ${terminalResultLabel()}`;
+  } else if (comparisonIsSelecting()) {
+    elements.turnOwner.textContent = `· 비교 수 ${comparisonUi.activeSlot.toUpperCase()} 선택`;
+  } else if (comparisonUi.mode === "running") {
+    elements.turnOwner.textContent = "· A/B 비교 분석 중";
+  } else if (comparisonUi.mode === "complete") {
+    elements.turnOwner.textContent = "· A/B 비교 결과";
+  } else if (comparisonUi.mode === "error") {
+    elements.turnOwner.textContent = "· A/B 비교 오류";
   } else if (practice.active) {
     elements.turnOwner.textContent = player === practice.attempt.settings.userColor ? "· 사용자 차례" : "· AI 차례";
   } else {
@@ -504,9 +629,20 @@ function updateBoardText() {
     ? `${gameDocument.moves.length}수 진행, 마지막 수 ${gameDocument.moves.at(-1)[1]}, ${playerName(player)} 차례`
     : `빈 오목판, ${playerName(player)} 차례`;
   elements.boardSummary.textContent = summary;
+  elements.boardHelp.textContent = comparisonIsSelecting()
+    ? `비교 수 ${comparisonUi.activeSlot.toUpperCase()}로 둘 합법 교차점을 고르세요. 클릭해도 실제 판에는 착수되지 않습니다.`
+    : comparisonUi.previewSlot
+      ? `비교 ${comparisonUi.previewSlot.toUpperCase()}의 강제 착수와 상대 최선 응수 PV를 반투명하게 표시합니다.`
+      : comparisonUi.mode === "running"
+        ? "기준 위치와 A/B를 순차 분석 중입니다. 비교가 끝나도 실제 판은 그대로 유지됩니다."
+        : comparisonUi.mode === "complete"
+          ? "A/B 표 아래의 미리보기 버튼으로 강제 착수와 상대 응수 PV를 확인하세요. 계속 두려면 비교를 초기화하세요."
+          : comparisonUi.mode === "error"
+            ? "비교를 다시 선택하거나 초기화한 뒤 계속할 수 있습니다."
+      : "교차점을 클릭해 착수합니다. 키보드는 방향키로 이동하고 Enter로 착수합니다.";
   canvas.setAttribute(
     "aria-label",
-    `15×15 Renju 오목판. ${summary}. 키보드 커서 ${xyToMove(boardCursor.x, boardCursor.y)}`,
+    `15×15 Renju 오목판. ${summary}. ${comparisonIsSelecting() ? `비교 수 ${comparisonUi.activeSlot.toUpperCase()} 선택 중. ` : ""}키보드 커서 ${xyToMove(boardCursor.x, boardCursor.y)}`,
   );
 }
 
@@ -587,7 +723,11 @@ function connectWebSocket() {
     const interruptedLiveAnalysis = analysisIsLive();
     if (interruptedLiveAnalysis) {
       analysisJob = transitionAnalysisJob(analysisJob, "failed");
-      discardIncompleteAnalysis("연결 끊김 · 부분 결과 폐기");
+      if (analysisContext?.owner === "comparison") {
+        failComparison("분석 연결이 끊겨 A/B 비교의 부분 결과를 폐기했습니다. 재연결 후 전체 비교를 다시 실행하세요.");
+      } else {
+        discardIncompleteAnalysis("연결 끊김 · 부분 결과 폐기");
+      }
     }
     clearTimeout(aiTimer);
     aiTimer = null;
@@ -613,8 +753,105 @@ function currentAnalysisIdentity() {
   };
 }
 
+function handleComparisonMessage(message) {
+  if (analysisContext?.owner !== "comparison" || !comparisonLab) return false;
+  const active = comparisonLab.activeRequest;
+  const targetsActive = Boolean(active)
+    && message?.clientRequestId === active.clientRequestId;
+
+  if (message?.type === "status") {
+    if (message.status === "analyzing" && targetsActive) {
+      if (analysisJob?.state === "requested") {
+        analysisJob = transitionAnalysisJob(analysisJob, "streaming");
+      }
+      setAnalysisStatus(`수 비교 ${comparisonLab.stage.toUpperCase()} 분석`, "busy");
+      renderComparisonLab();
+      updateControls();
+      return true;
+    }
+    return targetsActive;
+  }
+  if (message?.type === "warning" && targetsActive) {
+    elements.comparisonProgress.textContent = `엔진 경고: ${message.message}`;
+    elements.comparisonProgress.classList.add("error");
+    return true;
+  }
+  if (message?.type === "error") {
+    if (targetsActive) {
+      if (analysisIsLive()) analysisJob = transitionAnalysisJob(analysisJob, "failed");
+      failComparison(`비교 분석 오류(${message.code || "engine_error"}): ${message.message}`);
+      return true;
+    }
+    if (!message.clientRequestId && comparisonWorkflowActive()) {
+      notice(`보조 WebSocket 오류(${message.code || "unknown"})는 현재 비교 요청과 연결되지 않아 비교를 계속합니다.`, true);
+      return true;
+    }
+    return false;
+  }
+  if (!["analysis", "position"].includes(message?.type)) return false;
+  if (!targetsActive) return true;
+
+  const previous = comparisonLab;
+  let next;
+  try {
+    next = applyComparisonResponse(previous, message);
+  } catch (error) {
+    if (analysisIsLive()) analysisJob = transitionAnalysisJob(analysisJob, "failed");
+    failComparison(`비교 응답 계약 오류: ${error.message}`);
+    return true;
+  }
+  if (next === previous) {
+    failComparison("비교 응답의 purpose·revision·visits·수순 메타데이터가 요청과 일치하지 않습니다.");
+    return true;
+  }
+
+  if (message.type === "analysis") {
+    if (message.noResults === true) {
+      if (analysisIsLive()) analysisJob = transitionAnalysisJob(analysisJob, "interrupted");
+    } else {
+      const accepted = applyAnalysisResponse(analysisJob, message, {
+        positionRevision: previous.base.revision,
+        sessionEpoch: previous.sessionEpoch,
+      });
+      if (!accepted.accepted) {
+        failComparison("비교 분석 응답이 현재 요청 ID와 일치하지 않아 적용하지 않았습니다.");
+        return true;
+      }
+      analysisJob = accepted.job;
+    }
+  } else if (analysisIsLive()) {
+    analysisJob = transitionAnalysisJob(analysisJob, "interrupted");
+  }
+
+  comparisonLab = next;
+  if (next.status === "running") {
+    renderComparisonLab();
+    return true;
+  }
+  if (next.status === "ready") {
+    renderComparisonLab();
+    const generation = comparisonGeneration;
+    setTimeout(() => submitComparisonStage(generation), 0);
+    return true;
+  }
+  if (next.status === "complete") {
+    comparisonUi = { ...comparisonUi, mode: "complete", previewSlot: null, error: null };
+    analysisContext = null;
+    updateEngineBadge({ state: "ready" });
+    setAnalysisStatus("수 비교 완료");
+    renderComparisonLab();
+    drawBoard();
+    updateControls();
+    notice(`A ${comparisonUi.moveA}와 B ${comparisonUi.moveB} 비교를 완료했습니다. 결과 행과 PV 미리보기를 확인하세요.`);
+    return true;
+  }
+  failComparison("검색이 완료되기 전에 결과가 중단됐습니다. 부분 결과로 A/B 결론을 만들지 않았습니다.");
+  return true;
+}
+
 function handleMessage(message) {
   if (message?.engine) updateEngineBadge(message.engine);
+  if (analysisContext?.owner === "comparison" && handleComparisonMessage(message)) return;
   const decision = decideWebSocketMessage({
     message,
     job: analysisJob,
@@ -880,6 +1117,378 @@ function discardIncompleteAnalysis(responseKind) {
   elements.responseKind.textContent = responseKind;
 }
 
+function setComparisonStatus(text, tone = "") {
+  elements.comparisonStatus.textContent = text;
+  elements.comparisonStatus.className = `comparison-status${tone ? ` ${tone}` : ""}`;
+}
+
+function terminalOutcomeText(outcome) {
+  return ({ black_win: "공식 종국 · 흑 승", white_win: "공식 종국 · 백 승", draw: "공식 종국 · 무승부" })[outcome]
+    || "공식 종국";
+}
+
+function comparisonBranchPv(branch) {
+  const pv = [...(branch?.opponentOrder0Pv || [])];
+  if (branch?.opponentOrder0Move && pv[0] !== branch.opponentOrder0Move) {
+    pv.unshift(branch.opponentOrder0Move);
+  }
+  return pv;
+}
+
+function comparisonBranchValue(branch, metric) {
+  if (!branch) return "—";
+  if (metric === "move") return escapeHtml(branch.move);
+  if (metric === "raw-policy") return branch.baseRawPolicy === null ? "—" : policyPercent(branch.baseRawPolicy);
+  if (metric === "policy-rank") return branch.basePolicyRank === null ? "순위 없음" : `${branch.basePolicyRank}위`;
+  if (metric === "mcts-order") return branch.baseMctsOrder === null
+    ? "MCTS 후보 미반환" : `Order ${branch.baseMctsOrder}`;
+  if (metric === "base-visits") return branch.baseMctsVisits === null
+    ? "MCTS 후보 미반환"
+    : `${branch.baseMctsVisits} · ${percent(branch.baseVisitShare)}`;
+  if (branch.resultKind === "terminal") {
+    if (metric === "terminal") return terminalOutcomeText(branch.terminalOutcome);
+    if (["black-winrate", "mover-winrate", "delta", "root-visits", "reply", "pv"].includes(metric)) {
+      return metric === "reply" ? "종국 · 상대 응수 없음" : "— · MCTS 미실행";
+    }
+  }
+  if (metric === "black-winrate") return percent(branch.afterBlackWinrate);
+  if (metric === "mover-winrate") return percent(branch.afterMoverWinrate);
+  if (metric === "delta") return percentagePoints(branch.moverWinrateDeltaFromBase);
+  if (metric === "root-visits") return branch.afterRootVisits ?? "—";
+  if (metric === "reply") return branch.opponentOrder0Move
+    ? `Order 0 · ${escapeHtml(branch.opponentOrder0Move)}` : "Order 0 후보 미반환";
+  if (metric === "pv") {
+    const pv = comparisonBranchPv(branch);
+    return pv.length ? escapeHtml(pv.join(" ")) : "PV 미반환";
+  }
+  if (metric === "terminal") return "진행 중 위치";
+  return "—";
+}
+
+function comparisonConclusion(result) {
+  const { a, b } = result.branches;
+  if (a.resultKind === "terminal" || b.resultKind === "terminal") {
+    return `A ${a.move}: ${a.resultKind === "terminal" ? terminalOutcomeText(a.terminalOutcome) : "MCTS 분석"} · B ${b.move}: ${b.resultKind === "terminal" ? terminalOutcomeText(b.terminalOutcome) : "MCTS 분석"}. 종국 수에는 추정 Winrate를 만들지 않습니다.`;
+  }
+  const aMover = a.afterMoverWinrate;
+  const bMover = b.afterMoverWinrate;
+  if (!Number.isFinite(aMover) || !Number.isFinite(bMover)) {
+    return "두 분기의 최종 Winrate가 모두 있어야 비교 결론을 표시합니다.";
+  }
+  const insufficient = a.baseAnalysisInsufficient || b.baseAnalysisInsufficient
+    || a.afterAnalysisInsufficient || b.afterAnalysisInsufficient
+    || Number(a.afterRootVisits || 0) < MIN_GRADE_VISITS
+    || Number(b.afterRootVisits || 0) < MIN_GRADE_VISITS;
+  const difference = aMover - bMover;
+  const leader = Math.abs(difference) < .0005 ? null : difference > 0 ? a : b;
+  const comparisonText = leader
+    ? `${leader.label} ${leader.move} 쪽이 ${Math.abs(difference * 100).toFixed(1)}%p 높습니다.`
+    : "두 수의 착수자 관점 추정치가 거의 같습니다.";
+  return `${playerName(result.player)} 착수자 관점: A ${percent(aMover)} · B ${percent(bMover)}. ${comparisonText}${insufficient ? " 분석량이 적어 탐색 추정으로만 보세요." : ""}`;
+}
+
+function renderComparisonResults(result) {
+  const { a, b } = result.branches;
+  elements.comparisonHeadingA.textContent = `수 A · ${a.move}`;
+  elements.comparisonHeadingB.textContent = `수 B · ${b.move}`;
+  const rows = [
+    ["선택 수", "move"],
+    ["Raw policy · 착수 전", "raw-policy"],
+    ["Raw policy rank · 합법 수 기준", "policy-rank"],
+    ["MCTS Order · 착수 전", "mcts-order"],
+    ["Visits · Visit share · 착수 전", "base-visits"],
+    ["Winrate (Black) · 착수 후", "black-winrate"],
+    [`Winrate (${playerName(result.player)} 착수자) · 착수 후`, "mover-winrate"],
+    ["착수자 Winrate 변화 · 기준 대비", "delta"],
+    ["상대의 Order 0 응수", "reply"],
+    ["Root visits · 착수 후", "root-visits"],
+    ["상대 응수 PV", "pv"],
+    ["공식 종국 판정", "terminal"],
+  ];
+  elements.comparisonBody.innerHTML = rows.map(([label, metric]) => `<tr>
+    <th scope="row">${escapeHtml(label)}</th>
+    <td>${comparisonBranchValue(a, metric)}</td>
+    <td>${comparisonBranchValue(b, metric)}</td>
+  </tr>`).join("");
+  elements.comparisonConclusion.textContent = comparisonConclusion(result);
+  elements.comparisonResults.hidden = false;
+}
+
+function comparisonStageProgress() {
+  if (!comparisonLab) return null;
+  const descriptor = comparisonStageDescriptor(comparisonLab);
+  if (!descriptor) return null;
+  const index = ({ base: 1, a: 2, b: 3 })[descriptor.stage];
+  const label = ({ base: "기준 위치", a: `수 A · ${comparisonUi.moveA} 이후`, b: `수 B · ${comparisonUi.moveB} 이후` })[descriptor.stage];
+  const partialVisits = comparisonLab.partial?.snapshot?.rootInfo?.visits;
+  return `${index}/3 ${label} 분석${Number.isInteger(partialVisits) ? ` · 현재 Root visits ${partialVisits}` : ""}`;
+}
+
+function renderComparisonLab() {
+  elements.comparisonMoveA.textContent = comparisonUi.moveA || "선택 안 됨";
+  elements.comparisonMoveB.textContent = comparisonUi.moveB || "선택 안 됨";
+  elements.comparisonSlotA.dataset.filled = String(Boolean(comparisonUi.moveA));
+  elements.comparisonSlotB.dataset.filled = String(Boolean(comparisonUi.moveB));
+  elements.comparisonSlotA.setAttribute("aria-pressed", String(comparisonIsSelecting() && comparisonUi.activeSlot === "a"));
+  elements.comparisonSlotB.setAttribute("aria-pressed", String(comparisonIsSelecting() && comparisonUi.activeSlot === "b"));
+
+  if (comparisonUi.mode === "idle") {
+    setComparisonStatus("대기");
+    elements.comparisonProgress.textContent = "‘두 수 선택’을 누른 뒤 보드의 합법 교차점 두 곳을 고르세요.";
+    elements.comparisonProgress.classList.remove("error");
+    elements.comparisonResults.hidden = true;
+  } else if (comparisonUi.mode === "selecting") {
+    setComparisonStatus("수 선택 중");
+    const chosen = [comparisonUi.moveA && `A ${comparisonUi.moveA}`, comparisonUi.moveB && `B ${comparisonUi.moveB}`].filter(Boolean).join(" · ");
+    elements.comparisonProgress.textContent = comparisonUi.moveA && comparisonUi.moveB
+      ? `${chosen} · 선택 완료. 같은 visits로 비교하거나 A/B 버튼을 눌러 다시 고르세요.`
+      : `${chosen ? `${chosen} · ` : ""}보드에서 수 ${comparisonUi.activeSlot.toUpperCase()}를 선택하세요. 실제 판은 바뀌지 않습니다.`;
+    elements.comparisonProgress.classList.remove("error");
+    elements.comparisonResults.hidden = true;
+  } else if (comparisonUi.mode === "running") {
+    setComparisonStatus("분석 중", "busy");
+    elements.comparisonProgress.textContent = `${comparisonStageProgress() || "다음 비교 단계 준비"} · 각 ${comparisonLab?.maxVisits ?? "—"} visits`;
+    elements.comparisonProgress.classList.remove("error");
+    elements.comparisonResults.hidden = true;
+  } else if (comparisonUi.mode === "complete" && comparisonLab) {
+    setComparisonStatus("비교 완료");
+    elements.comparisonProgress.textContent = `기준 위치와 A/B를 각각 ${comparisonLab.maxVisits} visits로 순차 분석했습니다. 실제 Root visits는 아래에 그대로 표시합니다.`;
+    elements.comparisonProgress.classList.remove("error");
+    renderComparisonResults(deriveComparisonResult(comparisonLab));
+  } else {
+    setComparisonStatus("비교 오류", "error");
+    elements.comparisonProgress.textContent = comparisonUi.error || "비교를 완료하지 못했습니다. 두 수를 확인하고 다시 실행하세요.";
+    elements.comparisonProgress.classList.add("error");
+    elements.comparisonResults.hidden = true;
+  }
+
+  const selecting = comparisonIsSelecting();
+  const running = comparisonUi.mode === "running";
+  elements.comparisonSlotA.disabled = !selecting;
+  elements.comparisonSlotB.disabled = !selecting;
+  elements.comparisonSelect.hidden = selecting || running;
+  elements.comparisonSelect.textContent = comparisonUi.mode === "complete" || comparisonUi.mode === "error"
+    ? "두 수 다시 선택" : "두 수 선택";
+  elements.comparisonRun.hidden = !selecting;
+  elements.comparisonRun.disabled = !comparisonUi.moveA || !comparisonUi.moveB;
+  elements.comparisonCancel.hidden = !running;
+  elements.comparisonClear.disabled = comparisonUi.mode === "idle";
+  elements.comparisonPreviewA.setAttribute("aria-pressed", String(comparisonUi.previewSlot === "a"));
+  elements.comparisonPreviewB.setAttribute("aria-pressed", String(comparisonUi.previewSlot === "b"));
+  elements.comparisonHeadingA.classList.toggle("is-previewing", comparisonUi.previewSlot === "a");
+  elements.comparisonHeadingB.classList.toggle("is-previewing", comparisonUi.previewSlot === "b");
+}
+
+function clearComparison({ reason = "comparison-closed", announce = false } = {}) {
+  const wasOpen = comparisonIsOpen();
+  const ownedLiveRequest = analysisContext?.owner === "comparison" && analysisIsLive();
+  comparisonGeneration += 1;
+  if (ownedLiveRequest) {
+    analysisJob = cancelAnalysisJob(analysisJob);
+    send({ action: "cancel" });
+  }
+  if (comparisonLab) comparisonLab = invalidateComparisonLab(comparisonLab, reason);
+  comparisonLab = null;
+  comparisonUi = emptyComparisonUi();
+  if (analysisContext?.owner === "comparison") analysisContext = null;
+  if (ownedLiveRequest) setAnalysisStatus("비교 취소됨", "neutral");
+  renderComparisonLab();
+  drawBoard();
+  updateControls();
+  if (announce && wasOpen) notice("수 비교 실험을 초기화했습니다.");
+}
+
+function openComparisonSelection() {
+  if (!comparisonCanOpen()) {
+    notice(gameDocument.positionState?.isTerminal
+      ? "종국 위치에서는 두 수를 비교할 수 없습니다. 무르거나 새 판을 시작하세요."
+      : "진행 중인 AI 연습·복기를 마치고 금수 확인이 완료된 위치에서 비교할 수 있습니다.", true);
+    return false;
+  }
+  if (analysisIsLive()) {
+    cancelAnalysis();
+    discardIncompleteAnalysis("취소됨 · 부분 결과 폐기");
+    setAnalysisStatus("수 비교 준비", "neutral");
+  }
+  comparisonGeneration += 1;
+  comparisonLab = null;
+  comparisonUi = {
+    ...emptyComparisonUi(),
+    mode: "selecting",
+    activeSlot: "a",
+    anchor: {
+      revision: gameDocument.revision,
+      positionKey: positionKey(),
+      moves: cloneMoves(),
+      player: nextPlayer(),
+      officialPosition: gameDocument.positionState,
+      legalMoves: [...legalMoves],
+    },
+  };
+  renderComparisonLab();
+  notice("비교할 첫 번째 합법 수 A를 보드에서 선택하세요. 클릭해도 실제 착수되지 않습니다.");
+  drawBoard();
+  updateControls();
+  return true;
+}
+
+function chooseComparisonSlot(slot) {
+  if (!comparisonIsSelecting() || !["a", "b"].includes(slot)) return;
+  comparisonUi = { ...comparisonUi, activeSlot: slot };
+  renderComparisonLab();
+  drawBoard();
+}
+
+function chooseComparisonMove(move) {
+  if (!comparisonIsSelecting() || !comparisonAnchorIsCurrent()) {
+    clearComparison({ reason: "live-position-changed" });
+    notice("판이 바뀌어 비교 선택을 취소했습니다. 다시 두 수를 선택하세요.", true);
+    return false;
+  }
+  if (!comparisonUi.anchor.legalMoves.includes(move) || !legalMoves.includes(move)) {
+    notice(`${move}는 현재 공식 KataGomo 합법 수 목록에 없어 비교할 수 없습니다.`, true);
+    return false;
+  }
+  const slotKey = comparisonUi.activeSlot === "a" ? "moveA" : "moveB";
+  const otherMove = comparisonUi.activeSlot === "a" ? comparisonUi.moveB : comparisonUi.moveA;
+  if (move === otherMove) {
+    notice("A와 B에는 서로 다른 수를 선택해야 합니다.", true);
+    return false;
+  }
+  comparisonUi = {
+    ...comparisonUi,
+    [slotKey]: move,
+    activeSlot: comparisonUi.activeSlot === "a" ? "b" : "b",
+    previewSlot: null,
+  };
+  renderComparisonLab();
+  notice(comparisonUi.moveA && comparisonUi.moveB
+    ? `A ${comparisonUi.moveA}와 B ${comparisonUi.moveB}를 선택했습니다. 같은 visits로 비교할 수 있습니다.`
+    : `A ${comparisonUi.moveA}를 선택했습니다. 이제 수 B를 고르세요.`);
+  drawBoard();
+  updateControls();
+  return true;
+}
+
+function failComparison(message) {
+  const ownedRunningRequest = analysisContext?.owner === "comparison"
+    && comparisonLab?.status === "running";
+  if (ownedRunningRequest) {
+    if (analysisIsLive()) analysisJob = cancelAnalysisJob(analysisJob);
+    if (socket?.readyState === WebSocket.OPEN) send({ action: "cancel" });
+  }
+  comparisonGeneration += 1;
+  if (comparisonLab && !["complete", "canceled", "invalidated"].includes(comparisonLab.status)) {
+    comparisonLab = cancelComparisonLab(comparisonLab, "comparison-error");
+  }
+  if (analysisContext?.owner === "comparison") analysisContext = null;
+  comparisonUi = { ...comparisonUi, mode: "error", previewSlot: null, error: message };
+  setAnalysisStatus("수 비교 오류", "error");
+  renderComparisonLab();
+  drawBoard();
+  updateControls();
+  notice(message, true);
+}
+
+function submitComparisonStage(generation = comparisonGeneration) {
+  if (generation !== comparisonGeneration || !comparisonLab || comparisonLab.status !== "ready") return false;
+  if (!comparisonAnchorIsCurrent()) {
+    failComparison("기준 판이 바뀌어 비교 결과를 적용하지 않았습니다. 두 수를 다시 선택하세요.");
+    return false;
+  }
+  const descriptor = comparisonStageDescriptor(comparisonLab);
+  let prepared;
+  try {
+    prepared = beginComparisonRequest(comparisonLab, { clientRequestId: crypto.randomUUID() });
+  } catch (error) {
+    failComparison(`비교 요청을 만들지 못했습니다: ${error.message}`);
+    return false;
+  }
+  comparisonLab = prepared.comparison;
+  analysisJob = beginAnalysisJob({
+    clientRequestId: prepared.request.clientRequestId,
+    positionRevision: prepared.request.positionRevision,
+    sessionEpoch: prepared.request.sessionEpoch,
+    analysisPurpose: prepared.request.analysisPurpose,
+    requestedMaxVisits: prepared.request.maxVisits,
+  });
+  analysisContext = {
+    owner: "comparison",
+    comparisonGeneration: generation,
+    stage: descriptor.stage,
+    positionKey: comparisonUi.anchor.positionKey,
+    ply: prepared.request.moves.length,
+  };
+  if (!send(prepared.request)) {
+    analysisJob = transitionAnalysisJob(analysisJob, "failed");
+    failComparison("분석 서버에 비교 요청을 보내지 못했습니다.");
+    return false;
+  }
+  setAnalysisStatus(`수 비교 ${descriptor.stage.toUpperCase()} 분석`, "busy");
+  renderComparisonLab();
+  updateControls();
+  return true;
+}
+
+function runComparison() {
+  if (!comparisonIsSelecting() || !comparisonUi.moveA || !comparisonUi.moveB) return false;
+  if (!comparisonAnchorIsCurrent()) {
+    clearComparison({ reason: "live-position-changed" });
+    notice("판이 바뀌어 비교 선택을 취소했습니다. 다시 시작하세요.", true);
+    return false;
+  }
+  try {
+    const runId = crypto.randomUUID();
+    comparisonLab = createComparisonLab({
+      moves: comparisonUi.anchor.moves,
+      player: comparisonUi.anchor.player,
+      positionKey: comparisonUi.anchor.positionKey,
+      revision: comparisonUi.anchor.revision,
+      officialPosition: comparisonUi.anchor.officialPosition,
+      moveA: comparisonUi.moveA,
+      moveB: comparisonUi.moveB,
+      maxVisits: Number(elements.maxVisits.value),
+      runId,
+      sessionEpoch: `comparison:${runId}`,
+    });
+  } catch (error) {
+    failComparison(`비교를 시작할 수 없습니다: ${error.message}`);
+    return false;
+  }
+  comparisonUi = { ...comparisonUi, mode: "running", previewSlot: null, error: null };
+  notice(`기준 위치와 A ${comparisonUi.moveA}, B ${comparisonUi.moveB}를 각각 ${comparisonLab.maxVisits} visits로 분석합니다.`);
+  renderComparisonLab();
+  drawBoard();
+  updateControls();
+  return submitComparisonStage(comparisonGeneration);
+}
+
+function cancelComparisonRun() {
+  if (comparisonUi.mode !== "running") return;
+  const ownedLiveRequest = analysisContext?.owner === "comparison" && analysisIsLive();
+  comparisonGeneration += 1;
+  if (ownedLiveRequest) {
+    analysisJob = cancelAnalysisJob(analysisJob);
+    send({ action: "cancel" });
+  }
+  if (comparisonLab) comparisonLab = cancelComparisonLab(comparisonLab, "user");
+  comparisonLab = null;
+  comparisonUi = { ...comparisonUi, mode: "selecting", previewSlot: null, error: null };
+  if (analysisContext?.owner === "comparison") analysisContext = null;
+  setAnalysisStatus("비교 취소됨", "neutral");
+  renderComparisonLab();
+  drawBoard();
+  updateControls();
+  notice("수 비교를 취소했습니다. 선택한 A/B는 유지됩니다.");
+}
+
+function previewComparison(slot = null) {
+  if (comparisonUi.mode !== "complete") return;
+  comparisonUi = { ...comparisonUi, previewSlot: comparisonUi.previewSlot === slot ? null : slot };
+  renderComparisonLab();
+  drawBoard();
+}
+
 function send(value) {
   if (!socket || socket.readyState !== WebSocket.OPEN) {
     setAnalysisStatus("WebSocket 연결 대기", "error");
@@ -902,6 +1511,7 @@ function cancelAnalysis({ preservePractice = true } = {}) {
   updateControls();
 }
 function requestAnalysis(purpose = "manual") {
+  if (comparisonIsOpen()) clearComparison({ reason: "main-analysis-started" });
   if (gameDocument.positionState?.isTerminal) {
     notice(`${terminalResultLabel()} 위치는 이미 끝났으므로 분석을 시작하지 않습니다.`, true);
     return false;
@@ -963,6 +1573,7 @@ async function startPractice(startMoves = null, { continuedFromPly = null } = {}
     updateControls();
     return false;
   }
+  if (comparisonIsOpen()) clearComparison({ reason: "practice-started" });
   cancelAnalysis({ preservePractice: false });
   if (startMoves) {
     gameDocument = replaceGameMoves(gameDocument, startMoves);
@@ -1172,6 +1783,7 @@ async function playAiMove(analysis, token) {
 }
 
 async function attemptMove(move) {
+  if (comparisonIsOpen()) clearComparison({ reason: "live-move-played" });
   if (legalityState !== "ready") { notice("금수 확인이 끝날 때까지 착수할 수 없습니다.", true); return; }
   if (occupied(move)) { notice(`${move}에는 이미 돌이 있습니다.`, true); return; }
   if (forbiddenMoves.has(move)) {
@@ -1507,6 +2119,7 @@ function openHistoryReview(id, ply = null) {
     notice("진행 중인 AI 연습을 완료하거나 종료한 뒤 저장 기록을 복기하세요.", true);
     return false;
   }
+  if (comparisonIsOpen()) clearComparison({ reason: "history-review-opened" });
   const record = selectHistoryReview(history, id);
   if (!record) {
     notice("선택한 저장 기록을 찾을 수 없습니다.", true);
@@ -1726,9 +2339,10 @@ function renderViewState(view) {
 function updateControls() {
   const connected = socket?.readyState === WebSocket.OPEN;
   const busy = analysisIsLive() || practiceTransitionBusy();
+  const comparisonLocked = comparisonIsSelecting() || comparisonUi.mode === "running";
   const settingLocked = practice.active || practice.summaryPending || Boolean(reviewSession);
-  elements.mode.disabled = settingLocked || analysisIsLive();
-  elements.maxVisits.disabled = settingLocked;
+  elements.mode.disabled = settingLocked || analysisIsLive() || comparisonLocked;
+  elements.maxVisits.disabled = settingLocked || comparisonUi.mode === "running";
   const practiceSettingsDisabled = settingLocked || isFreeAnalysisMode();
   for (const element of [elements.userColor, elements.stopPly, elements.gradingMode]) {
     element.disabled = practiceSettingsDisabled;
@@ -1745,8 +2359,25 @@ function updateControls() {
   elements.sameStart.disabled = !connected || engineState !== "ready" || trainingContractState !== "ready"
     || practice.active || !practice.ended || practice.summaryPending || Boolean(reviewSession);
   renderViewState(currentViewState());
+  if (comparisonIsOpen()) {
+    const selecting = comparisonIsSelecting();
+    canvas.classList.toggle("locked", !selecting);
+    canvas.dataset.interaction = selecting ? "compare" : comparisonUi.mode === "running" ? "busy" : "blocked";
+    canvas.dataset.primary = String(selecting);
+    canvas.setAttribute("aria-disabled", String(!selecting));
+    elements.practiceStart.disabled = true;
+    elements.analyze.disabled = true;
+  }
+  elements.comparisonSelect.disabled = !comparisonCanOpen() || comparisonUi.mode === "running";
+  elements.comparisonRun.disabled = !comparisonIsSelecting()
+    || !comparisonUi.moveA || !comparisonUi.moveB || !connected || engineState !== "ready";
+  elements.comparisonCancel.disabled = comparisonUi.mode !== "running";
+  elements.sizeMetric.disabled = comparisonIsOpen();
+  elements.topCount.disabled = comparisonIsOpen();
+  elements.comparisonCard.classList.toggle("is-error", comparisonUi.mode === "error");
 }
 function canPlaceMove(view = currentViewState()) {
+  if (comparisonIsOpen()) return false;
   if (!view.boardInteractive) return false;
   if (!practice.active) return true;
   return practice.phase === "user_turn" && nextPlayer() === practice.attempt.settings.userColor
@@ -1754,6 +2385,7 @@ function canPlaceMove(view = currentViewState()) {
 }
 
 async function undoMove() {
+  if (comparisonIsOpen()) clearComparison({ reason: "undo" });
   cancelAnalysis();
   if (!gameDocument.moves.length) return;
   if (practice.active || practice.ended) {
@@ -1818,11 +2450,12 @@ async function resetBoard() {
     practiceActive: practice.active,
     practiceEnded: practice.ended,
     analysisPresent: analysisIsLive() || Boolean(currentAnalysis)
-      || allCandidates.length > 0 || fullPolicy.length > 0,
+      || allCandidates.length > 0 || fullPolicy.length > 0 || comparisonIsOpen(),
   });
   if (confirmReset && !window.confirm("현재 수순과 연습·분석 상태를 지우고 새 판을 시작할까요?")) {
     return false;
   }
+  if (comparisonIsOpen()) clearComparison({ reason: "board-reset" });
   cancelAnalysis({ preservePractice: false });
   practice = emptyPractice(practice.token + 1);
   gameDocument = replaceGameMoves(gameDocument, []);
@@ -1853,6 +2486,10 @@ function intersectionAtPoint(px, py) {
 }
 
 canvas.addEventListener("pointermove", (event) => {
+  if (comparisonIsOpen()) {
+    if (hoveredCandidateMove !== null) focusCandidate(null, false);
+    return;
+  }
   const { x, y } = canvasPoint(event);
   const hit = candidateHitAtPoint(candidateHitAreas, { x, y });
   const next = hit?.move || null;
@@ -1862,6 +2499,16 @@ canvas.addEventListener("pointerleave", () => focusCandidate(null, false));
 canvas.addEventListener("click", async (event) => {
   const point = canvasPoint(event);
   const intersection = intersectionAtPoint(point.x, point.y);
+  if (comparisonIsSelecting()) {
+    if (!intersection) return;
+    boardCursor = { x: intersection.x, y: intersection.y };
+    chooseComparisonMove(intersection.move);
+    return;
+  }
+  if (comparisonIsOpen()) {
+    notice("수 비교 결과를 보는 중입니다. 비교 초기화 또는 두 수 다시 선택을 사용하세요.", true);
+    return;
+  }
   const candidateHit = candidateHitAtPoint(candidateHitAreas, point);
   const intent = resolveBoardPointerIntent({
     candidateHit,
@@ -1890,7 +2537,8 @@ canvas.addEventListener("keydown", async (event) => {
     drawBoard();
   } else if (["Enter", " "].includes(event.key)) {
     event.preventDefault();
-    if (canPlaceMove()) await attemptMove(xyToMove(boardCursor.x, boardCursor.y));
+    if (comparisonIsSelecting()) chooseComparisonMove(xyToMove(boardCursor.x, boardCursor.y));
+    else if (canPlaceMove()) await attemptMove(xyToMove(boardCursor.x, boardCursor.y));
     else notice("현재는 착수할 수 없습니다.", true);
   }
 });
@@ -1914,6 +2562,10 @@ elements.practiceFinish.addEventListener("click", () => {
   void finishPractice("manual");
 });
 elements.cancel.addEventListener("click", () => {
+  if (comparisonUi.mode === "running") {
+    cancelComparisonRun();
+    return;
+  }
   cancelAnalysis();
   if (practice.active) setPracticePhase("error", "분석 취소", "error");
   notice("분석을 취소했습니다. 현재 위치 분석으로 다시 시작할 수 있습니다.");
@@ -1932,6 +2584,15 @@ elements.reviewLast.addEventListener("click", () => {
 });
 elements.reviewClose.addEventListener("click", closeHistoryReview);
 elements.reviewStartPractice.addEventListener("click", startPracticeFromReview);
+elements.comparisonSelect.addEventListener("click", openComparisonSelection);
+elements.comparisonSlotA.addEventListener("click", () => chooseComparisonSlot("a"));
+elements.comparisonSlotB.addEventListener("click", () => chooseComparisonSlot("b"));
+elements.comparisonRun.addEventListener("click", runComparison);
+elements.comparisonCancel.addEventListener("click", cancelComparisonRun);
+elements.comparisonClear.addEventListener("click", () => clearComparison({ announce: true }));
+elements.comparisonPreviewA.addEventListener("click", () => previewComparison("a"));
+elements.comparisonPreviewB.addEventListener("click", () => previewComparison("b"));
+elements.comparisonPreviewClear.addEventListener("click", () => previewComparison(null));
 elements.summaryBody.addEventListener("click", (event) => {
   const row = event.target.closest("[data-ply]");
   if (row && practice.attempt?.sessionEpoch) openHistoryReview(practice.attempt.sessionEpoch, Number(row.dataset.ply));
@@ -1951,6 +2612,7 @@ elements.clearPv.addEventListener("click", () => { pinnedCandidateMove = null; h
 elements.sizeMetric.addEventListener("change", drawBoard);
 elements.topCount.addEventListener("change", () => { renderCandidates(); renderRawPolicy(); drawBoard(); });
 elements.mode.addEventListener("change", () => {
+  if (comparisonIsOpen()) clearComparison({ reason: "mode-changed" });
   cancelAnalysis();
   clearAnalysisDisplay();
   if (elements.mode.value === "analysis" && practice.ended) {
@@ -2041,6 +2703,7 @@ async function refreshTrainingOptions() {
 }
 
 renderHistory();
+renderComparisonLab();
 drawBoard();
 refreshLegality();
 connectWebSocket();

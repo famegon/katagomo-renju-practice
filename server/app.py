@@ -482,8 +482,11 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                                     "code": "position_terminal",
                                     "message": "The Renju game has already ended",
                                     "clientRequestId": command.clientRequestId,
+                                    "analysisPurpose": command.analysisPurpose,
                                     "positionRevision": command.positionRevision,
                                     "sessionEpoch": command.sessionEpoch,
+                                    "requestedMaxVisits": command.maxVisits,
+                                    "positionMoveCount": len(command.moves),
                                     "gameState": game_state,
                                 }
                             )

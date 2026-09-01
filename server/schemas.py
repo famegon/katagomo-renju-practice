@@ -41,7 +41,13 @@ class AnalyzeCommand(BaseModel):
     userColor: Player = "B"
     clientRequestId: str | None = Field(default=None, max_length=128)
     analysisPurpose: Literal[
-        "manual", "user_pre", "post_user_ai", "final_grade"
+        "manual",
+        "user_pre",
+        "post_user_ai",
+        "final_grade",
+        "comparison_base",
+        "comparison_a",
+        "comparison_b",
     ] = "manual"
     positionRevision: Annotated[int, Field(ge=0)] = 0
     sessionEpoch: str | None = Field(default=None, max_length=128)
