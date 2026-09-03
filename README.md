@@ -2,6 +2,8 @@
 
 > macOS에서 실행하는 로컬 15×15 Renju 연습 플랫폼
 
+[![CI](https://github.com/famegon/katagomo-renju-practice/actions/workflows/ci.yml/badge.svg)](https://github.com/famegon/katagomo-renju-practice/actions/workflows/ci.yml)
+
 KataGomo Renju Practice는 공식 [KataGomo](https://github.com/hzyhhzy/KataGomo) 엔진과 공식 릴리스에서 다운로드되는 Renju 신경망을 그대로 사용해, Mac에서 혼자 수를 놓고 실시간 분석을 확인하는 데스크톱 웹 앱이다. 별도 계정이나 클라우드 서버 없이 `127.0.0.1`에서 실행된다. **이 저장소를 GitHub에 올리는 것만으로 공개 웹사이트가 생기지는 않는다.** GitHub Pages에서는 네이티브 KataGomo 프로세스와 Python 서버를 실행할 수 없으므로, 사용자는 저장소를 각자 Mac에 clone해 로컬로 실행해야 한다.
 
 [Short English guide](README.en.md)
@@ -70,11 +72,11 @@ brew --version
 
 ## 처음 설치
 
-GitHub에서 저장소를 clone한 뒤 프로젝트 루트에서 실행한다. 아직 공개 저장소 주소가 정해지지 않았으므로 아래 `OWNER/REPO`는 **게시할 때 실제 GitHub 소유자와 저장소 이름으로 교체해야 하는 자리표시자**다.
+GitHub에서 저장소를 clone한 뒤 프로젝트 루트에서 실행한다.
 
 ```bash
-git clone https://github.com/OWNER/REPO.git
-cd REPO
+git clone https://github.com/famegon/katagomo-renju-practice.git
+cd katagomo-renju-practice
 ```
 
 첫 설정 명령은 Homebrew로 `cmake`, `eigen`, `jq`를 설치하고 실행·테스트용 Python 패키지를 `.venv`에 설치한다. 모델 다운로드는 269,873,929 bytes(약 257 MiB)다.
@@ -319,10 +321,9 @@ make websocket-smoke
 
 ### 공개 저장소로 게시할 때
 
-1. 이 문서의 `OWNER/REPO`를 실제 GitHub 경로로 교체한다.
-2. `make release-check`로 모델, `vendor/`, 빌드, 로그와 `.venv`가 현재 트리와 Git 이력에 들어가지 않았는지 확인한다.
-3. 깨끗한 clone에서 `make bootstrap`, `make test`, `make integration-test`, `make dev`를 확인한다.
-4. GitHub Actions의 Python 3.11/3.14 일반 CI와 수동 실엔진 통합 테스트가 통과한 뒤 공개 태그를 만든다.
+1. `make release-check`로 모델, `vendor/`, 빌드, 로그와 `.venv`가 현재 트리와 Git 이력에 들어가지 않았는지 확인한다.
+2. 깨끗한 clone에서 `make bootstrap`, `make test`, `make integration-test`, `make dev`를 확인한다.
+3. GitHub Actions의 Python 3.11/3.14 일반 CI와 수동 실엔진 통합 테스트가 통과한 뒤 공개 태그를 만든다.
 
 공개 GitHub 저장소는 **소스 배포 경로**다. 모델과 엔진 바이너리를 GitHub Release에 묶지 않으며, 방문자가 링크만 열어 체험하는 호스팅 서비스로 설명하지 않는다.
 

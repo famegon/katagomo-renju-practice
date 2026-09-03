@@ -1,5 +1,7 @@
 # KataGomo Renju Practice
 
+[![CI](https://github.com/famegon/katagomo-renju-practice/actions/workflows/ci.yml/badge.svg)](https://github.com/famegon/katagomo-renju-practice/actions/workflows/ci.yml)
+
 KataGomo Renju Practice is a **local macOS desktop web app** for exploring
 15×15 Renju positions with the official KataGomo engine and Renju model. It
 shows raw policy, MCTS visits, Black winrate, and PVs; supports AI practice or
@@ -25,12 +27,9 @@ _A real CPU/Eigen analysis of `B H8, W H9` with the official model, not mock dat
 
 ## Install and run
 
-The public repository URL has not been chosen yet. Replace `OWNER/REPO` below
-with the real GitHub path when this project is published.
-
 ```bash
-git clone https://github.com/OWNER/REPO.git
-cd REPO
+git clone https://github.com/famegon/katagomo-renju-practice.git
+cd katagomo-renju-practice
 python3 --version
 make doctor
 make bootstrap
