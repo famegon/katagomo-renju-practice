@@ -442,8 +442,8 @@ function selectState(state, terminal, boardInteractive, actions) {
   return result(
     "practice-setup",
     "neutral",
-    "시작 위치를 준비하세요.",
-    "빈 보드에서 시작하거나 직접 수를 둔 뒤 AI 연습을 시작할 수 있습니다.",
+    "AI 자동 응수는 아직 꺼져 있습니다.",
+    "빈 보드에서 시작하거나 직접 수를 둔 뒤 ‘AI 연습 시작’을 누르세요.",
     "practice-start",
   );
 }

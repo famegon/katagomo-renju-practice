@@ -44,6 +44,7 @@ import {
 } from "./history-review.mjs";
 import { deriveViewState } from "./view-state.mjs";
 import { decideWebSocketMessage } from "./ws-message-state.mjs";
+import { decidePracticeReconnect } from "./socket-recovery.mjs";
 import {
   candidateHitAtPoint,
   resetNeedsConfirmation,
@@ -170,6 +171,8 @@ let pinnedCandidateMove = null;
 let boardCursor = { x: 7, y: 7 };
 let socket;
 let reconnectTimer;
+let practiceRecoveryTimer;
+let practiceRecoveryPending = false;
 let analysisJob = null;
 let analysisContext = null;
 let aiTimer = null;
@@ -461,7 +464,7 @@ function updateModeUi() {
   elements.userWinrateRow.hidden = freeAnalysis;
   elements.modeHelp.textContent = freeAnalysis
     ? "사용자 색과 AI 자동 착수 없이 흑·백을 번갈아 직접 둡니다. 각 위치에서 ‘현재 위치 분석’을 누르세요."
-    : "사용자 색을 정하고 반대 색은 KataGomo가 자동 착수합니다.";
+    : "아래 ‘AI 연습 시작’을 누르면 반대 색을 KataGomo가 자동 착수합니다.";
 }
 function notice(text, isError = false) {
   elements.actionNotice.textContent = text;
@@ -795,15 +798,83 @@ async function refreshLegality() {
   return legalityState === "ready";
 }
 
+function preparedUserTurnIsCurrent() {
+  const prepared = practice.preparedAnalysis;
+  return Boolean(practice.active && practice.phase === "user_turn" && prepared?.isFinal
+    && Number(prepared.turnNumber) === gameDocument.moves.length
+    && Number(prepared.positionRevision) === gameDocument.revision
+    && prepared.sessionEpoch === practice.attempt?.sessionEpoch
+    && prepared.analysisPurpose === "user_pre");
+}
+
+function clearPracticeRecovery() {
+  clearTimeout(practiceRecoveryTimer);
+  practiceRecoveryTimer = null;
+  practiceRecoveryPending = false;
+}
+
+function schedulePracticeRecovery(delay = 0) {
+  clearTimeout(practiceRecoveryTimer);
+  practiceRecoveryTimer = setTimeout(() => {
+    practiceRecoveryTimer = null;
+    void resumePracticeAfterReconnect();
+  }, delay);
+}
+
+async function resumePracticeAfterReconnect() {
+  const activeSocket = socket;
+  if (!activeSocket || activeSocket.readyState !== WebSocket.OPEN) return;
+  const decision = decidePracticeReconnect({
+    practiceActive: practice.active,
+    recoveryPending: practiceRecoveryPending,
+    analysisLive: analysisIsLive(),
+    phase: practice.phase,
+    aiTimerPending: Boolean(aiTimer),
+    preparedUserTurn: preparedUserTurnIsCurrent(),
+  });
+  if (decision === "none") return;
+  if (decision === "flow-resumed" || decision === "user-ready") {
+    clearPracticeRecovery();
+    if (decision === "user-ready") {
+      setPracticePhase("user_turn", "사용자 착수", "");
+      notice("분석 서버에 다시 연결되었습니다. 준비된 위치에서 계속 착수하세요.");
+    }
+    return;
+  }
+  if (decision === "wait") {
+    schedulePracticeRecovery(250);
+    return;
+  }
+  if (engineState !== "ready") {
+    await refreshStatus();
+    if (socket !== activeSocket || !practice.active || !practiceRecoveryPending) return;
+    if (engineState !== "ready") {
+      schedulePracticeRecovery(750);
+      return;
+    }
+  }
+  const token = practice.token;
+  clearPracticeRecovery();
+  notice("분석 서버에 다시 연결되어 중단된 연습 분석을 자동으로 이어갑니다.");
+  void beginPracticeTurn(token);
+}
+
 function connectWebSocket() {
+  if (socket && [WebSocket.OPEN, WebSocket.CONNECTING].includes(socket.readyState)) return;
   clearTimeout(reconnectTimer);
+  reconnectTimer = null;
   const scheme = location.protocol === "https:" ? "wss" : "ws";
-  socket = new WebSocket(`${scheme}://${location.host}/ws/analysis`);
-  socket.addEventListener("open", () => {
+  const candidateSocket = new WebSocket(`${scheme}://${location.host}/ws/analysis`);
+  socket = candidateSocket;
+  candidateSocket.addEventListener("open", () => {
+    if (socket !== candidateSocket) return;
     setAnalysisStatus("연결됨", "neutral");
+    if (practice.active && practiceRecoveryPending) schedulePracticeRecovery();
     updateControls();
   });
-  socket.addEventListener("close", () => {
+  candidateSocket.addEventListener("close", () => {
+    if (socket !== candidateSocket) return;
+    socket = null;
     const interruptedLiveAnalysis = analysisIsLive();
     if (interruptedLiveAnalysis) {
       analysisJob = transitionAnalysisJob(analysisJob, "failed");
@@ -813,18 +884,21 @@ function connectWebSocket() {
         discardIncompleteAnalysis("연결 끊김 · 부분 결과 폐기");
       }
     }
-    clearTimeout(aiTimer);
-    aiTimer = null;
     setAnalysisStatus("연결 끊김", "error");
     if (practice.active) {
-      practice.token += 1;
-      setPracticePhase("error", "연결 오류", "error");
-      notice("분석 연결이 끊겼습니다. 재연결 후 ‘현재 위치 분석’을 눌러 계속하세요.", true);
+      practiceRecoveryPending = true;
+      notice("분석 연결이 끊겼습니다. 다시 연결되면 현재 연습을 자동으로 이어갑니다.", true);
     }
-    reconnectTimer = setTimeout(connectWebSocket, 1500);
+    if (!reconnectTimer) {
+      reconnectTimer = setTimeout(() => {
+        reconnectTimer = null;
+        connectWebSocket();
+      }, 1500);
+    }
     updateControls();
   });
-  socket.addEventListener("message", (event) => {
+  candidateSocket.addEventListener("message", (event) => {
+    if (socket !== candidateSocket) return;
     try { handleMessage(JSON.parse(event.data)); }
     catch (error) { notice(`응답 JSON 오류: ${error.message}`, true); }
   });
@@ -1636,6 +1710,7 @@ function cancelAnalysis({ preservePractice = true } = {}) {
   clearTimeout(aiTimer);
   aiTimer = null;
   if (!preservePractice && (practice.active || practice.ended)) {
+    clearPracticeRecovery();
     practice = emptyPractice(practice.token + 1);
   }
   updateControls();
@@ -1707,6 +1782,7 @@ async function startPractice(startMoves = null, { continuedFromPly = null } = {}
   if (comparisonIsOpen()) clearComparison({ reason: "practice-started" });
   switchWorkbenchTab("analysis");
   cancelAnalysis({ preservePractice: false });
+  clearPracticeRecovery();
   if (startMoves) {
     gameDocument = replaceGameMoves(gameDocument, startMoves);
   }
@@ -1795,7 +1871,10 @@ async function processPracticeFinal(message, request) {
     drawBoard();
     return;
   }
-  if (practice.pendingRecord && !(await finalizePendingRecord(message))) return;
+  if (practice.pendingRecord) {
+    setPracticePhase("finalizing", "사용자 수 채점 중", "busy");
+    if (!(await finalizePendingRecord(message))) return;
+  }
   if (!practiceIdentityMatches(token, epoch, revision)) return;
   if (hasReachedPracticeLimit()) {
     finishPractice("ply-limit");
@@ -2484,7 +2563,7 @@ function updateControls() {
     element.disabled = practiceSettingsDisabled;
   }
   updateModeUi();
-  elements.practiceStart.textContent = practice.ended ? "현재 위치에서 새 연습" : "이 위치에서 연습 시작";
+  elements.practiceStart.textContent = practice.ended ? "현재 위치에서 새 AI 연습" : "이 위치에서 AI 연습 시작";
   elements.analyze.textContent = practice.active ? "현재 단계 재분석" : "현재 위치 분석";
   elements.practiceFinish.hidden = !practice.active;
   elements.practiceFinish.disabled = !connected || engineState !== "ready" || !practice.active || busy
@@ -2782,7 +2861,7 @@ elements.mode.addEventListener("change", () => {
   }
   setPracticePhase(elements.mode.value === "analysis" ? "analysis" : "setup", elements.mode.value === "analysis" ? "양쪽 직접" : "설정 중", "neutral");
   elements.practiceStart.disabled = elements.mode.value !== "practice";
-  notice(elements.mode.value === "analysis" ? "사용자 색 없이 흑·백을 모두 직접 착수합니다. AI는 자동 착수하지 않습니다." : "현재 위치를 시작점으로 삼아 AI와 연습할 수 있습니다.");
+  notice(elements.mode.value === "analysis" ? "사용자 색 없이 흑·백을 모두 직접 착수합니다. AI는 자동 착수하지 않습니다." : "현재 위치를 시작점으로 ‘AI 연습 시작’을 누르면 자동 응수가 켜집니다.");
   drawBoard();
   updateControls();
 });

@@ -35,6 +35,8 @@ test("public UI states the fixed product scope without internal stage language",
   assert.doesNotMatch(html, /Stage\s*[0-9]|초반/);
   assert.doesNotMatch(app, /새 초반/);
   assert.equal(matches(/\bid=["']rules["']/g, html).length, 0, "Renju is not user-selectable");
+  assert.match(html, /AI 연습 시작[^<]*누르면 반대 색을 KataGomo가 자동 착수/);
+  assert.match(app, /AI 연습 시작[^"\n]*누르면 반대 색을 KataGomo가 자동 착수/);
 });
 
 test("the renewed desktop UI consolidates tools into one accessible workbench", () => {
@@ -126,6 +128,8 @@ test("engine process details stay in collapsed diagnostics rather than the heade
 
 test("WebSocket routing and board hit decisions come from executable pure modules", () => {
   assert.match(app, /import \{ decideWebSocketMessage \} from "\.\/ws-message-state\.mjs"/);
+  assert.match(app, /import \{ decidePracticeReconnect \} from "\.\/socket-recovery\.mjs"/);
+  assert.match(app, /if \(socket !== candidateSocket\) return/);
   assert.match(app, /candidateHitAtPoint/);
   assert.match(app, /resolveBoardPointerIntent/);
   const comparisonRoute = app.indexOf('analysisContext?.owner === "comparison" && handleComparisonMessage(message)');

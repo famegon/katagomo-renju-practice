@@ -36,6 +36,8 @@ function terminalState(outcome, terminalReason, extra = {}) {
 test("practice setup and free analysis expose one clear primary action", () => {
   const practice = deriveViewState(READY);
   assert.equal(practice.key, "practice-setup");
+  assert.match(practice.task.title, /자동 응수.*꺼져/);
+  assert.match(practice.task.message, /AI 연습 시작/);
   assert.equal(practice.primaryAction, "practice-start");
   assert.deepEqual(primaryActions(practice), ["practice-start"]);
   assert.equal(practice.boardInteractive, true);
