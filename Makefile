@@ -1,7 +1,10 @@
-.PHONY: bootstrap setup venv python-deps source engine opencl model verify-model smoke benchmark benchmark-threads forbidden-helper dev test integration-test compare-visits websocket-smoke
+.PHONY: bootstrap doctor setup venv python-deps source engine opencl model verify-model smoke benchmark benchmark-threads forbidden-helper dev release-check test integration-test compare-visits websocket-smoke
 
-bootstrap: setup engine model forbidden-helper smoke
+bootstrap: doctor setup engine model forbidden-helper smoke
 	@echo "KataGomo Renju Practice is ready. Start it with: make dev"
+
+doctor:
+	./scripts/doctor.sh
 
 setup:
 	@echo "Installing the minimal native CPU build and smoke-test dependencies: CMake, Eigen, and jq."
@@ -49,7 +52,10 @@ forbidden-helper:
 dev:
 	./scripts/dev.sh
 
-test: forbidden-helper
+release-check:
+	./scripts/check-release-tree.sh
+
+test: forbidden-helper release-check
 	@test -x .venv/bin/python || { echo "Missing .venv. Run: make setup" >&2; exit 1; }
 	@command -v node >/dev/null || { echo "Missing Node.js. Install Node 18 or newer for web tests." >&2; exit 1; }
 	@node -e 'const major = Number(process.versions.node.split(".")[0]); if (major < 18) { console.error(`Node 18 or newer is required, got $${process.versions.node}`); process.exit(1); }'

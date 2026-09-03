@@ -28,7 +28,41 @@ fi
 
 mkdir -p "${model_dir}"
 echo "Downloading the official 269,873,929-byte Renju b28c512nbt model..."
-curl --fail --location --output "${partial_path}" "${model_url}"
+if [[ -f "${partial_path}" ]]; then
+  partial_size="$(wc -c < "${partial_path}" | tr -d ' ')"
+  if (( partial_size > expected_size )); then
+    echo "Partial download is larger than the official model and was left untouched: ${partial_path}" >&2
+    echo "Move or remove it before retrying." >&2
+    exit 1
+  fi
+  if (( partial_size == expected_size )); then
+    if verify_file "${partial_path}" && gzip -t "${partial_path}"; then
+      mv "${partial_path}" "${model_path}"
+      echo "Completed partial download verified: ${expected_sha256}"
+      exit 0
+    fi
+    echo "Completed partial download failed verification and was left untouched: ${partial_path}" >&2
+    echo "Move or remove it before retrying." >&2
+    exit 1
+  fi
+  echo "Resuming the existing ${partial_size}-byte partial download."
+fi
+
+retry_all_errors=()
+if curl --help all 2>/dev/null | grep -q -- '--retry-all-errors'; then
+  retry_all_errors=(--retry-all-errors)
+fi
+
+curl \
+  --fail \
+  --location \
+  --continue-at - \
+  --retry 5 \
+  --retry-delay 2 \
+  "${retry_all_errors[@]}" \
+  --connect-timeout 30 \
+  --output "${partial_path}" \
+  "${model_url}"
 
 if ! verify_file "${partial_path}"; then
   echo "Downloaded model failed size or SHA-256 verification; keeping .part for inspection." >&2

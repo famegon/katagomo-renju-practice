@@ -1,8 +1,14 @@
 # KataGomo Renju Practice
 
-> 로컬 15×15 Renju 연습 플랫폼
+> macOS에서 실행하는 로컬 15×15 Renju 연습 플랫폼
 
-KataGomo Renju Practice는 공식 [KataGomo](https://github.com/hzyhhzy/KataGomo) 엔진과 공식 릴리스에서 다운로드되는 Renju 신경망을 그대로 사용해, Mac에서 혼자 수를 놓고 실시간 분석을 확인하는 데스크톱 웹 앱이다. 별도 계정이나 클라우드 서버 없이 `127.0.0.1`에서 실행된다.
+KataGomo Renju Practice는 공식 [KataGomo](https://github.com/hzyhhzy/KataGomo) 엔진과 공식 릴리스에서 다운로드되는 Renju 신경망을 그대로 사용해, Mac에서 혼자 수를 놓고 실시간 분석을 확인하는 데스크톱 웹 앱이다. 별도 계정이나 클라우드 서버 없이 `127.0.0.1`에서 실행된다. **이 저장소를 GitHub에 올리는 것만으로 공개 웹사이트가 생기지는 않는다.** GitHub Pages에서는 네이티브 KataGomo 프로세스와 Python 서버를 실행할 수 없으므로, 사용자는 저장소를 각자 Mac에 clone해 로컬로 실행해야 한다.
+
+[Short English guide](README.en.md)
+
+![실제 KataGomo 엔진의 100 visits 분석 결과가 표시된 데스크톱 작업대](docs/assets/workbench.jpg)
+
+_실제 공식 모델과 CPU/Eigen 엔진으로 `B H8, W H9` 위치를 100 visits 분석한 화면이며 mock 데이터가 아니다._
 
 신경망 가중치는 공개 다운로드되지만 릴리스 페이지에 별도 라이선스가 명시되어 있지 않다. 이 저장소는 모델을 포함하거나 재배포하지 않고 사용자의 Mac에서 원본 자산을 직접 받으며, 모델에 대한 사용·재배포 권리를 별도로 부여하지 않는다. 자세한 범위는 [Third-party notices](THIRD_PARTY_NOTICES.md)를 확인한다.
 
@@ -36,14 +42,24 @@ KataGomo Renju Practice는 공식 [KataGomo](https://github.com/hzyhhzy/KataGomo
 
 | 항목 | 요구 사항 |
 |---|---|
-| macOS | 데스크톱 macOS. Apple Silicon M5에서 검증했으며 Intel Mac은 아직 실기 검증하지 않았다. |
+| macOS | 데스크톱 macOS. Apple Silicon M5에서 검증했으며 Intel Mac은 실험적 지원으로 아직 실기 검증하지 않았다. |
 | Homebrew | CMake, Eigen, jq 설치에 사용 |
 | Python | 기존에 설치된 안정적인 CPython **3.11 이상** |
-| Node.js | 18 이상. 브라우저 단위 테스트 실행에 필요 |
+| Node.js | 18 이상. 개발자용 브라우저 단위 테스트에만 필요하며 앱 실행에는 불필요 |
 | Compiler | Apple Command Line Tools의 C++17 compiler |
 | 디스크 | 모델 약 257 MiB, 엔진 소스·빌드·가상환경을 위한 추가 여유 공간 |
 
 특정 Python 버전을 새로 설치하지 않는다. `make setup`은 현재 `python3`가 3.11 이상인지 확인하고 프로젝트 전용 `.venv`를 만든다. 이 저장소에서 실제 검증한 버전은 CPython 3.14.6이다.
+
+설치 전에 기존 Python을 확인한다. 아래 두 번째 명령이 실패하거나 `python3`가 없다면, 먼저 안정적인 CPython 3.11 이상을 준비해야 한다. `make setup`은 Python 자체를 새로 설치하지 않는다.
+
+```bash
+python3 --version
+python3 -c 'import sys; assert sys.version_info >= (3, 11), sys.version'
+make doctor
+```
+
+`make doctor`는 패키지를 설치하거나 시스템을 바꾸지 않고 플랫폼, 기존 Python, 개발 도구, 디스크와 기본 포트를 확인한다. 아직 설치되지 않은 CMake, Eigen, jq는 경고로 안내하고 `make bootstrap`이 Homebrew를 통해 설치한다.
 
 처음 설치하는 Mac이라면 아래 두 명령으로 Apple Command Line Tools와 Homebrew가 준비됐는지 먼저 확인한다. 명령이 없다고 나오면 Command Line Tools는 `xcode-select --install`로 설치하고, Homebrew는 [공식 설치 안내](https://brew.sh/)를 따른다.
 
@@ -54,7 +70,14 @@ brew --version
 
 ## 처음 설치
 
-GitHub에서 저장소를 clone한 뒤 프로젝트 루트에서 실행한다. 첫 명령은 Homebrew로 `cmake`, `eigen`, `jq`를 설치하고 Python 패키지를 `.venv`에 설치한다. 모델 다운로드는 269,873,929 bytes(약 257 MiB)다.
+GitHub에서 저장소를 clone한 뒤 프로젝트 루트에서 실행한다. 아직 공개 저장소 주소가 정해지지 않았으므로 아래 `OWNER/REPO`는 **게시할 때 실제 GitHub 소유자와 저장소 이름으로 교체해야 하는 자리표시자**다.
+
+```bash
+git clone https://github.com/OWNER/REPO.git
+cd REPO
+```
+
+첫 설정 명령은 Homebrew로 `cmake`, `eigen`, `jq`를 설치하고 실행·테스트용 Python 패키지를 `.venv`에 설치한다. 모델 다운로드는 269,873,929 bytes(약 257 MiB)다.
 
 처음부터 전체 CPU/Eigen 환경을 준비하고 실제 smoke까지 확인하려면 다음 한 명령을 사용할 수 있다.
 
@@ -82,6 +105,13 @@ make smoke
 
 기존 소스 디렉터리의 remote/commit이 다르거나 로컬 변경이 있으면 스크립트는 덮어쓰지 않고 중단한다. 기존 모델의 크기나 해시가 다를 때도 파일을 교체하지 않는다.
 
+### 실행 의존성과 테스트 의존성
+
+- 앱의 직접 Python 런타임 의존성은 `requirements.txt`에, 테스트 전용 직접 의존성은 `requirements-dev.txt`에 구분되어 있다. 재현 가능한 개발 환경을 위해 `make setup`은 둘의 검증된 전체 버전 집합인 `requirements-lock.txt`를 설치한다.
+- 앱 실행에는 macOS, Apple Command Line Tools, Homebrew와 Python 3.11 이상이 필요하다. CMake와 Eigen은 네이티브 엔진/helper 빌드에, jq는 smoke 검증에 사용한다.
+- Node.js는 앱을 실행하는 데 필요하지 않다. `make test`의 브라우저 로직 테스트를 실행하려는 개발자에게만 Node.js 18 이상이 필요하다.
+- `make integration-test`에는 실제 CPU/Eigen 엔진과 공식 모델까지 준비되어 있어야 하며 mock 데이터로 대체하지 않는다.
+
 ## 실행과 종료
 
 ```bash
@@ -104,7 +134,9 @@ make dev
 
 화면은 왼쪽 **Renju 보드**와 오른쪽 단일 **분석 작업대**로 구성된다. 작업대의 `분석 / 수 비교 / 기록` 탭은 한 번에 선택한 기능만 보여준다. 분석 탭 안에서는 `MCTS 후보 / Raw policy`를 전환하며, 기술 용어와 엔진 세부정보는 작업대 하단에서 필요할 때만 펼친다.
 
-- AI 연습에서는 흑 또는 백을 선택한다. AI는 최종 검색 결과의 `order=0` 후보만 자동 착수한다.
+- AI 연습에서는 흑 또는 백을 선택한 뒤 **이 위치에서 AI 연습 시작**을 눌러야 자동 응수가 켜진다. 색만 선택한 상태에서는 AI가 자동으로 두지 않는다.
+- 사용자가 흑이면 연습 시작 후 사용자가 먼저 둔 다음 AI가 백으로 응수한다. 사용자가 백이면 연습을 시작하자마자 AI가 흑 첫 수를 분석해 둔다.
+- AI는 최종 검색 결과의 `order=0` 후보만 자동 착수한다. CPU/Eigen 100 visits는 검증한 M5에서 한 검색에 약 5초가 걸렸으며, 다른 Mac에서는 더 오래 걸릴 수 있다. 분석 중 상태가 표시되는 동안 다음 착수를 기다린다.
 - 양쪽 직접 두기에서는 AI 자동 착수와 사용자 색 채점을 끄고 두 색을 직접 둔다.
 - 기본 분석량은 100 visits이며 더 깊은 확인에는 500 visits를 선택할 수 있다.
 - MCTS 후보 보기에서 원 크기 기준을 Raw policy 또는 Visit share로 바꿀 수 있다. 보드에는 모든 후보의 Order 원을 남기고, 전체 지표 라벨은 Order 0과 현재 가리키거나 고정한 후보에만 표시한다.
@@ -224,6 +256,15 @@ make dev
 
 서버 시작 때 모델의 크기, gzip stream, SHA-256을 다시 확인한다.
 
+## 알려진 제한사항
+
+- **로컬 단일 사용자용:** 서버는 `127.0.0.1` 전용이며 실제 분석 세션은 한 번에 하나만 허용한다. 인증·사용자 격리·공용 서버 운영 기능은 없다.
+- **호스팅 미지원:** GitHub Pages, LAN 공개, reverse proxy 배포는 현재 지원 범위가 아니다.
+- **플랫폼 범위:** Apple Silicon M5 macOS에서 검증했다. Intel Mac은 실험적이며, Windows·Linux와 모바일 UI는 지원·검증하지 않았다.
+- **성능:** 기본 CPU/Eigen 분석은 검색마다 수 초 이상 걸릴 수 있다. Metal 백엔드는 없으며 OpenCL은 불안정한 opt-in 실험 기능이다.
+- **기록 저장:** 연습 기록은 현재 브라우저의 localStorage에만 남고 다른 Mac이나 브라우저 프로필로 동기화되지 않는다.
+- **설명 범위:** 엔진 수치와 PV를 비교할 수 있지만, 사람처럼 전략적 이유를 생성하는 자연어 튜터는 아직 제공하지 않는다.
+
 ## 문제 해결
 
 - **Chrome에 이전 화면이 보임:** `/`와 `/static/*`은 서버가 `Cache-Control: no-store`로 보낸다. 그래도 이미 열린 탭이 오래된 자산을 잡고 있으면 서버를 `Ctrl-C`로 종료하고 `make dev`로 다시 시작한 뒤 Chrome에서 `Cmd-Shift-R`로 강력 새로고침한다.
@@ -239,11 +280,12 @@ make dev
 ## 테스트
 
 ```bash
+make release-check
 make test
 make integration-test
 ```
 
-`make test`는 JavaScript 문법·상태·기록 규칙과 Python 단위·프로세스·API/WebSocket 테스트를 실행한다. `make integration-test`는 mock이 아닌 CPU/Eigen KataGomo 엔진과 공식 모델로 실제 분석을 수행한다.
+`make release-check`는 모델·엔진 checkout·빌드·로그·가상환경·비밀정보 후보·10 MiB 초과 파일이 Git 이력에 들어가는 것을 막는다. `make test`는 이 검사를 포함해 JavaScript 문법·상태·기록 규칙과 Python 단위·프로세스·API/WebSocket 테스트를 실행한다. `make integration-test`는 mock이 아닌 CPU/Eigen KataGomo 엔진과 공식 모델로 실제 분석을 수행한다.
 
 GitHub Actions의 일반 CI는 macOS와 Python 3.11/3.14에서 웹·Python·공식 helper 테스트를 실행한다. 257 MiB 모델 다운로드와 전체 CPU 엔진 빌드가 필요한 실엔진 통합 테스트는 Actions 화면에서 수동으로 실행한다.
 
@@ -257,7 +299,7 @@ make dev                  # 별도 터미널에서 유지
 make websocket-smoke
 ```
 
-> 최종 회귀 기록(2026-09-01): JavaScript 문법 검사와 웹 상태·저장·DOM 테스트 79 passed, Python 테스트 190 passed / 2 deselected, 실제 CPU/Eigen 엔진·공식 모델 통합 테스트 2 passed / 190 deselected.
+> 최종 회귀 기록(2026-09-03): JavaScript 문법 검사와 웹 상태·저장·DOM 테스트 82 passed, Python 테스트 202 passed / 2 deselected, 실제 CPU/Eigen 엔진·공식 모델 통합 테스트 2 passed / 202 deselected.
 
 ## 배포 파일과 라이선스
 
@@ -274,6 +316,15 @@ make websocket-smoke
 - `.venv/`, `node_modules/` 로컬 의존성
 
 `make engine`과 `make model`이 사용자의 컴퓨터에서 공식 소스와 공식 릴리스 자산을 직접 가져온다. 모델의 URL과 무결성 메타데이터만 `models/MANIFEST.json`에 추적한다. 가중치에는 별도 라이선스가 명시되지 않았으며 이 프로젝트는 모델에 대한 권리를 부여하지 않는다. KataGomo, KataGo와 모델 저자는 이 UI와 제휴하거나 이를 보증하지 않는다.
+
+### 공개 저장소로 게시할 때
+
+1. 이 문서의 `OWNER/REPO`를 실제 GitHub 경로로 교체한다.
+2. `make release-check`로 모델, `vendor/`, 빌드, 로그와 `.venv`가 현재 트리와 Git 이력에 들어가지 않았는지 확인한다.
+3. 깨끗한 clone에서 `make bootstrap`, `make test`, `make integration-test`, `make dev`를 확인한다.
+4. GitHub Actions의 Python 3.11/3.14 일반 CI와 수동 실엔진 통합 테스트가 통과한 뒤 공개 태그를 만든다.
+
+공개 GitHub 저장소는 **소스 배포 경로**다. 모델과 엔진 바이너리를 GitHub Release에 묶지 않으며, 방문자가 링크만 열어 체험하는 호스팅 서비스로 설명하지 않는다.
 
 ---
 
@@ -615,6 +666,9 @@ Order는 Visits 순위와 다를 수 있다. 보존된 CPU 비교에서 `G9`는 
 | `8bf988b` | 반복 연습 UI와 채점 |
 | `d8e617d` | 실행 재현성 검증 |
 | `1cd61a8` | 데스크톱 Renju 연습 플랫폼 |
+| `3715b8c` | 실제 엔진 기반 수 비교 실험실 |
+| `373eaa3` | 데스크톱 분석 작업대 단순화 |
+| `123433f` | 재연결 뒤 AI 자동 응수 복구 |
 
 각 체크포인트는 모델, 빌드 산출물, 로그, `.venv`, `vendor/`를 포함하지 않는다. 공식 KataGomo checkout은 지정 커밋에서 clean 상태로 유지했다.
 
