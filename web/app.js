@@ -72,6 +72,10 @@ import {
   selectWorkbenchTab,
   showsMctsBoardOverlay,
 } from "./workbench-state.mjs";
+import {
+  parseRenjuKifuJson,
+  validateKifuFileMetadata,
+} from "./kifu-json.mjs";
 
 const BOARD_SIZE = 15;
 const POLICY_LENGTH = 226;
@@ -109,6 +113,7 @@ const elements = {
   practiceStart: byId("practice-start"), practiceFinish: byId("practice-finish"),
   analyze: byId("analyze"), cancel: byId("cancel"),
   retryLegality: byId("retry-legality"), retryTraining: byId("retry-training"),
+  kifuImport: byId("kifu-import"), kifuFile: byId("kifu-file"),
   undo: byId("undo"), reset: byId("reset"), clearPv: byId("clear-pv"),
   candidates: byId("candidates"), rawPolicy: byId("raw-policy"),
   candidateFocus: byId("candidate-focus"), candidateFocusCard: byId("candidate-focus-card"),
@@ -183,6 +188,8 @@ let comparisonLab = null;
 let comparisonGeneration = 0;
 let comparisonUi = emptyComparisonUi();
 let workbenchUi = createWorkbenchState();
+let kifuImportGeneration = 0;
+let kifuImporting = false;
 const suppressedComparisonCancelIds = new Set();
 
 function emptyComparisonUi() {
@@ -764,6 +771,27 @@ function applyPositionState(state, responseRevision = gameDocument.revision) {
   return true;
 }
 
+async function requestOfficialPositionState(moves) {
+  const response = await fetch("/api/position", {
+    method: "POST", headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      moves,
+      nextPlayer: moves.length % 2 === 0 ? "B" : "W",
+    }),
+  });
+  let body;
+  try {
+    body = await response.json();
+  } catch {
+    throw new Error(`공식 판정 응답을 읽을 수 없습니다 (HTTP ${response.status})`);
+  }
+  if (!response.ok) {
+    const detail = typeof body.detail === "string" ? body.detail : JSON.stringify(body.detail ?? body);
+    throw new Error(detail || `HTTP ${response.status}`);
+  }
+  return body;
+}
+
 async function refreshLegality() {
   const generation = ++legalityGeneration;
   const requestedRevision = gameDocument.revision;
@@ -773,16 +801,8 @@ async function refreshLegality() {
   elements.legalityStatus.textContent = "금수 정보를 확인 중입니다.";
   updateControls();
   try {
-    const response = await fetch("/api/position", {
-      method: "POST", headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        moves: requestedMoves,
-        nextPlayer: requestedMoves.length % 2 === 0 ? "B" : "W",
-      }),
-    });
-    const body = await response.json();
+    const body = await requestOfficialPositionState(requestedMoves);
     if (generation !== legalityGeneration) return false;
-    if (!response.ok) throw new Error(body.detail || `HTTP ${response.status}`);
     if (!applyPositionState(body, requestedRevision)) return false;
   } catch (error) {
     if (generation !== legalityGeneration) return false;
@@ -2556,6 +2576,8 @@ function updateControls() {
   const busy = analysisIsLive() || practiceTransitionBusy();
   const comparisonLocked = comparisonIsSelecting() || comparisonUi.mode === "running";
   const settingLocked = practice.active || practice.summaryPending || Boolean(reviewSession);
+  elements.kifuImport.disabled = kifuImporting;
+  elements.kifuFile.disabled = kifuImporting;
   elements.mode.disabled = settingLocked || analysisIsLive() || comparisonLocked;
   elements.maxVisits.disabled = settingLocked || comparisonUi.mode === "running";
   const practiceSettingsDisabled = settingLocked || isFreeAnalysisMode();
@@ -2688,6 +2710,63 @@ async function resetBoard() {
   return true;
 }
 
+async function importRenjuKifuFile(file) {
+  if (!file) return false;
+  const generation = ++kifuImportGeneration;
+  const originalRevision = gameDocument.revision;
+  kifuImporting = true;
+  updateControls();
+  notice(`${file.name} 기보를 읽고 공식 Renju 판정을 확인합니다.`);
+  try {
+    validateKifuFileMetadata(file);
+    const kifu = parseRenjuKifuJson(await file.text());
+    const positionState = await requestOfficialPositionState(kifu.moves);
+    if (generation !== kifuImportGeneration) return false;
+    if (gameDocument.revision !== originalRevision) {
+      throw new Error("기보를 확인하는 동안 현재 판이 바뀌었습니다. 다시 불러오세요");
+    }
+    const replacesWork = gameDocument.moves.length > 0 || practice.active || practice.ended
+      || analysisIsLive() || Boolean(currentAnalysis) || comparisonIsOpen() || Boolean(reviewSession);
+    if (replacesWork && !window.confirm("현재 수순과 연습·분석 상태를 불러온 기보로 교체할까요?")) {
+      notice("기보 불러오기를 취소했습니다.");
+      return false;
+    }
+
+    if (comparisonIsOpen()) clearComparison({ reason: "kifu-imported" });
+    if (reviewSession) closeHistoryReview();
+    cancelAnalysis({ preservePractice: false });
+    clearPracticeRecovery();
+    practice = emptyPractice(practice.token + 1);
+    legalityGeneration += 1;
+    gameDocument = replaceGameMoves(gameDocument, kifu.moves);
+    elements.mode.value = "analysis";
+    updateModeUi();
+    switchWorkbenchTab("analysis");
+    elements.resultsCard.hidden = true;
+    elements.instantCard.hidden = true;
+    elements.sessionComplete.dataset.complete = "false";
+    elements.sessionComplete.textContent = "기보 위치";
+    clearAnalysisDisplay();
+    if (!applyPositionState(positionState, gameDocument.revision)) {
+      throw new Error("공식 판정 결과를 현재 기보 위치에 적용하지 못했습니다");
+    }
+    setPracticePhase("analysis", "기보 위치", "neutral");
+    notice(`${file.name} · ${kifu.moves.length}수를 불러왔습니다. 무르거나 현재 위치를 분석할 수 있습니다.`);
+    return true;
+  } catch (error) {
+    if (generation === kifuImportGeneration) {
+      notice(`기보 불러오기 실패: ${error.message}`, true);
+    }
+    return false;
+  } finally {
+    if (generation === kifuImportGeneration) {
+      kifuImporting = false;
+      elements.kifuFile.value = "";
+      updateControls();
+    }
+  }
+}
+
 function canvasPoint(event) {
   return clientPointToCanvas(
     event,
@@ -2790,6 +2869,14 @@ elements.cancel.addEventListener("click", () => {
 });
 elements.undo.addEventListener("click", undoMove);
 elements.reset.addEventListener("click", resetBoard);
+elements.kifuImport.addEventListener("click", () => {
+  elements.kifuFile.value = "";
+  elements.kifuFile.click();
+});
+elements.kifuFile.addEventListener("change", () => {
+  const file = elements.kifuFile.files?.[0];
+  if (file) void importRenjuKifuFile(file);
+});
 elements.continuePractice.addEventListener("click", continueCompletedPractice);
 elements.sameStart.addEventListener("click", () => startPractice(practice.attempt.openingMoves));
 elements.newOpening.addEventListener("click", () => startPractice([]));

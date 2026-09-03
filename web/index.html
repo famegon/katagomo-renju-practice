@@ -49,6 +49,8 @@
           <div class="board-command-bar">
             <p id="board-help" class="board-help">교차점을 클릭해 착수합니다. 방향키로 이동하고 Enter로 둘 수도 있습니다.</p>
             <div class="button-row board-actions" aria-label="보드 동작">
+              <button id="kifu-import" class="quiet-button" type="button">JSON 기보 불러오기</button>
+              <input id="kifu-file" type="file" accept=".json,application/json" hidden />
               <button id="undo" class="quiet-button" type="button">무르기</button>
               <button id="reset" class="quiet-button" type="button">새 판</button>
             </div>

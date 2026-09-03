@@ -27,6 +27,7 @@ _실제 공식 모델과 CPU/Eigen 엔진으로 `B H8, W H9` 위치를 100 visit
 
 - **AI와 연습:** 사용자가 흑 또는 백을 맡고 AI가 반대쪽을 둔다.
 - **양쪽 직접 두기:** 사용자 색을 정하지 않고 흑·백을 번갈아 놓으며 원하는 위치를 분석한다.
+- **JSON 기보 불러오기:** 고정된 15×15 Renju JSON 수순을 로컬에서 읽어 보드에 복원하고, 한 수씩 무르거나 그 위치를 분석한다.
 - **공식 금수·종국 판정:** 흑의 3×3, 4×4, 장목과 승리·금수패·무승부를 공식 KataGomo 코드로 판정한다.
 - **실시간 분석:** 검색 도중과 최종 결과의 Raw policy, Visits, Visit share, Winrate (Black), PV, Order, Root visits를 표시한다.
 - **후보 비교:** policy와 MCTS visits를 합치지 않고 별도로 보여준다.
@@ -145,6 +146,31 @@ make dev
 - 후보를 가리키거나 선택하면 PV 예상 수순을 보드에서 확인할 수 있다.
 - 흑 금수는 표시되고 클릭이 차단된다. KataGomo 금수 판정이 실패하면 임의 판정 대신 안전하게 착수와 분석을 막는다.
 - 수 제한에 도달하거나 공식 종국이 되면 결과와 수별 평가를 정리한다.
+
+### JSON 기보 불러오기
+
+보드 아래의 **JSON 기보 불러오기**에서 최대 256 KiB의 `.json` 파일을 선택한다. 파일은 브라우저에서만 읽으며 외부 서비스로 업로드하지 않는다. 앱은 JSON 구조를 먼저 검사한 다음 전체 수순을 공식 KataGomo position helper로 검증하고, 두 검사를 모두 통과한 경우에만 기존 판을 교체한다.
+
+지원 형식은 하나로 고정한다. [예제 파일](examples/renju-kifu.json)을 복사해 사용할 수 있다.
+
+```json
+{
+  "format": "katagomo-renju-kifu",
+  "version": 1,
+  "rules": "renju",
+  "boardSize": 15,
+  "moves": [
+    ["B", "H8"],
+    ["W", "H9"]
+  ]
+}
+```
+
+- 수순은 흑 `B`부터 백 `W`와 번갈아야 하며, 좌표는 KataGomo의 `A1`~`P15` 표기에서 `I` 열을 제외한다.
+- Renju 이외의 규칙, 15×15 이외의 보드, 중복·범위 밖 착수, 종국 뒤에 이어진 수순은 거부한다.
+- 불러온 위치는 **양쪽 직접 두기 · 분석** 모드로 열린다. **무르기**는 한 수를 제거하고, **현재 위치 분석**은 기존 MCTS 분석을 시작한다.
+- 이미 끝난 기보는 공식 종국 상태로 표시한다. 종국에서는 분석과 추가 착수를 막지만, 한 수 무르면 이전 위치를 다시 분석할 수 있다.
+- 기보를 불러오는 것만으로 연습 기록에 저장되지는 않는다. 해당 위치에서 AI 연습을 시작하고 완료하면 기존 연습 기록 규칙에 따라 저장된다.
 
 ### 수 비교 실험실
 
@@ -301,7 +327,7 @@ make dev                  # 별도 터미널에서 유지
 make websocket-smoke
 ```
 
-> 최종 회귀 기록(2026-09-03): JavaScript 문법 검사와 웹 상태·저장·DOM 테스트 82 passed, Python 테스트 202 passed / 2 deselected, 실제 CPU/Eigen 엔진·공식 모델 통합 테스트 2 passed / 202 deselected.
+> 최종 회귀 기록(2026-09-03): JavaScript 문법 검사와 웹 상태·저장·DOM·JSON 기보 테스트 88 passed, Python 테스트 202 passed / 2 deselected, 실제 CPU/Eigen 엔진·공식 모델 통합 테스트 2 passed / 202 deselected.
 
 ## 배포 파일과 라이선스
 
@@ -693,6 +719,7 @@ native/forbidden_helper/        공식 BoardHistory + Board::isForbidden() adapt
 server/                         FastAPI, persistent engine, position, 변환, 채점
 web/                            데스크톱 Renju 연습·분석 UI
 tests/                          JS/Python 단위·프로세스·실엔진 통합 테스트
+examples/                       지원하는 Renju JSON 기보 예제
 scripts/                        소스·모델·빌드·실행·smoke·benchmark 스크립트
 benchmarks/                     CPU benchmark용 15×15 시작 SGF
 smoke/                          실제 Renju analysis JSONL 요청

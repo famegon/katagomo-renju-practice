@@ -8,6 +8,11 @@ shows raw policy, MCTS visits, Black winrate, and PVs; supports AI practice or
 placing both colors manually; and uses KataGomo's C++ rules code for forbidden
 moves and terminal positions.
 
+The board can also import the single supported 15×15 Renju JSON format. Use
+[`examples/renju-kifu.json`](examples/renju-kifu.json) as a template. Files are
+read locally in the browser, validated by the official KataGomo position
+helper, and then opened in free-analysis mode for undo or MCTS analysis.
+
 This is not a hosted service. Publishing the repository does not make it run on
 GitHub Pages: every user must build the native engine and run the Python server
 on their own Mac at `127.0.0.1`.
@@ -54,7 +59,7 @@ make integration-test
 ```
 
 `make test` includes the release-tree guard. The latest recorded regression
-passed 82 web tests, 202 Python unit tests, and
+passed 88 web tests, 202 Python unit tests, and
 2 real-engine integration tests. The integration tests use the actual official
 model rather than mock analysis.
 

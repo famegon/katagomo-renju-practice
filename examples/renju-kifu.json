@@ -1,0 +1,12 @@
+{
+  "format": "katagomo-renju-kifu",
+  "version": 1,
+  "rules": "renju",
+  "boardSize": 15,
+  "moves": [
+    ["B", "H8"],
+    ["W", "H9"],
+    ["B", "F9"],
+    ["W", "G8"]
+  ]
+}

@@ -116,6 +116,22 @@ test("the DOM is wired to the pure view state and exposes official terminal stat
   assert.match(html, /id="retry-training"/);
 });
 
+test("JSON kifu import is local, Renju-only, and officially validated before board replacement", () => {
+  assert.match(html, /id="kifu-import"[^>]*>JSON 기보 불러오기</);
+  assert.match(html, /id="kifu-file"[^>]*type="file"[^>]*accept="\.json,application\/json"[^>]*hidden/);
+  assert.match(app, /from "\.\/kifu-json\.mjs"/);
+  assert.match(app, /requestOfficialPositionState\(kifu\.moves\)/);
+  assert.match(app, /window\.confirm\("현재 수순과 연습·분석 상태를 불러온 기보로 교체할까요\?"\)/);
+  const importBody = app.match(/async function importRenjuKifuFile\(file\) \{[\s\S]*?\n\}/)?.[0] || "";
+  assert.ok(
+    importBody.indexOf("requestOfficialPositionState(kifu.moves)")
+      < importBody.indexOf("gameDocument = replaceGameMoves(gameDocument, kifu.moves)"),
+    "official position validation must finish before the live board changes",
+  );
+  assert.match(importBody, /elements\.mode\.value = "analysis"/);
+  assert.doesNotMatch(importBody, /localStorage/);
+});
+
 test("engine process details stay in collapsed diagnostics rather than the header badge", () => {
   for (const id of [
     "engine-diagnostic-state", "engine-pid", "engine-restarts", "engine-last-error",
